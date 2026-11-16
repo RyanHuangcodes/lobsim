@@ -14,8 +14,11 @@
     { "name": "sanitize", "configurePreset": "sanitize" }
   ],
   "testPresets": [
-    { "name": "debug", "configurePreset": "debug", "output": { "outputOnFailure": true } },
-    { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } },
-    { "name": "sanitize", "configurePreset": "sanitize", "output": { "outputOnFailure": true } }
+    { "name": "debug", "configurePreset": "debug", "output": { "outputOnFailure": true },
+      "execution": { "jobs": 10 } },
+    { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true },
+      "execution": { "jobs": 10 } },
+    { "name": "sanitize", "configurePreset": "sanitize", "output": { "outputOnFailure": true },
+      "execution": { "jobs": 10 } }
   ]
 }

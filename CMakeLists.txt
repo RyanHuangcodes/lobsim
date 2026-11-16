@@ -66,7 +66,7 @@ foreach(_t gtest gtest_main gmock benchmark nlohmann_json)
   endif()
 endforeach()
 
-add_library(lob STATIC src/lob/reference_book.cpp)
+add_library(lob STATIC src/lob/order_book.cpp src/lob/reference_book.cpp)
 target_include_directories(lob PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(lob PUBLIC cxx_std_20)
 target_link_libraries(lob PRIVATE lobsim_options)
@@ -82,7 +82,20 @@ add_executable(lob_tests
   tests/unit/cancel_modify_test.cpp
   tests/unit/stp_test.cpp
   tests/unit/queries_test.cpp
-  tests/unit/conservation_test.cpp)
+  tests/unit/conservation_test.cpp
+  tests/unit/pool_test.cpp
+  tests/unit/order_book_validate_test.cpp)
 target_include_directories(lob_tests PRIVATE tests)
 target_link_libraries(lob_tests PRIVATE lob lobsim_options GTest::gtest_main)
 gtest_discover_tests(lob_tests)
+
+# Differential fuzz test (SPEC 4): OrderBook vs ReferenceBook, event for event.
+add_executable(fuzz_diff tests/fuzz_diff.cpp)
+target_include_directories(fuzz_diff PRIVATE tests)
+target_link_libraries(fuzz_diff PRIVATE lob lobsim_options)
+# The default mode (200 seeds x 10,000 messages) split by seed range into separate
+# entries, so the sanitize build can run them in parallel (CMakePresets test jobs).
+foreach(_first RANGE 1 181 20)
+  math(EXPR _last "${_first} + 19")
+  add_test(NAME fuzz_diff_seeds_${_first}_${_last} COMMAND fuzz_diff --first-seed ${_first} --seeds 20)
+endforeach()

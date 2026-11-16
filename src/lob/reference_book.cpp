@@ -271,14 +271,17 @@ std::size_t ReferenceBook::resting_orders() const { return orders_.size(); }
 void ReferenceBook::validate() const {
   auto fail = [](const std::string& what) { throw std::logic_error("ReferenceBook: " + what); };
 
-  for (std::size_t i = 0; i < orders_.size(); ++i) {
-    const Resting& o = orders_[i];
-    const std::string who = "order " + std::to_string(o.id);
-    if (o.remaining <= 0) fail(who + " has remaining <= 0");
-    if (!price_in_range(o.price)) fail(who + " has price outside [1, max_price]");
-    for (std::size_t j = i + 1; j < orders_.size(); ++j)
-      if (orders_[j].id == o.id) fail("duplicate order id " + std::to_string(o.id));
+  std::vector<OrderId> ids;
+  ids.reserve(orders_.size());
+  for (const Resting& o : orders_) {
+    if (o.remaining <= 0) fail("order " + std::to_string(o.id) + " has remaining <= 0");
+    if (!price_in_range(o.price)) fail("order " + std::to_string(o.id) + " has price outside [1, max_price]");
+    ids.push_back(o.id);
   }
+  // Duplicate ids, found by sorting a copy: O(n log n) instead of comparing every pair.
+  std::sort(ids.begin(), ids.end());
+  auto dup = std::adjacent_find(ids.begin(), ids.end());
+  if (dup != ids.end()) fail("duplicate order id " + std::to_string(*dup));
   std::size_t bid = find_best(Side::Buy);
   std::size_t ask = find_best(Side::Sell);
   if (bid != orders_.size() && ask != orders_.size() && orders_[bid].price >= orders_[ask].price)

@@ -91,3 +91,81 @@ TEST(ConservationChecker, DetectsATradeAgainstAnUnknownOrder) {
   auto bad = c.check(buy, {Ack{2, 2, 0}, Trade{1, 100, 5, 77, 2, 1, 2, Side::Buy}}, lookup_in(book));
   EXPECT_FALSE(bad.empty());
 }
+
+// ---- check_fast(): the same verdicts in O(open + touched), using the book's resting count.
+
+TEST(ConservationCheckerFast, AcceptsAHonestStream) {
+  ConservationChecker c;
+  std::map<OrderId, Qty> book;
+  book[1] = 10;
+  EXPECT_TRUE(c.check_fast(sell(1, 10), {Ack{1, 1, 0}}, lookup_in(book), book.size()).empty());
+  NewOrder buy = sell(2, 4);
+  buy.side = Side::Buy;
+  book[1] = 6;
+  EXPECT_TRUE(c.check_fast(buy, {Ack{2, 2, 0}, Trade{1, 100, 4, 1, 2, 1, 2, Side::Buy}}, lookup_in(book),
+                           book.size()).empty());
+  book.erase(1);
+  EXPECT_TRUE(c.check_fast(Cancel{1, 1}, {Cancelled{1, 1, 6, CancelReason::User}}, lookup_in(book),
+                           book.size()).empty());
+}
+
+TEST(ConservationCheckerFast, DetectsABookThatLosesALotAfterATrade) {
+  ConservationChecker c;
+  std::map<OrderId, Qty> book;
+  book[1] = 10;
+  ASSERT_TRUE(c.check_fast(sell(1, 10), {Ack{1, 1, 0}}, lookup_in(book), book.size()).empty());
+  NewOrder buy = sell(2, 4);
+  buy.side = Side::Buy;
+  auto bad = c.check_fast(buy, {Ack{2, 2, 0}, Trade{1, 100, 4, 1, 2, 1, 2, Side::Buy}}, lookup_in(book),
+                          book.size());
+  ASSERT_EQ(bad.size(), 1u);
+  EXPECT_NE(bad[0].find("order 1"), std::string::npos);
+}
+
+TEST(ConservationCheckerFast, DetectsAnUntouchedOrderChangedWithoutEvents) {
+  ConservationChecker c;
+  std::map<OrderId, Qty> book;
+  book[1] = 10;
+  book[2] = 5;
+  ASSERT_TRUE(c.check_fast(sell(1, 10), {Ack{1, 1, 0}}, lookup_in(book), 1).empty());
+  ASSERT_TRUE(c.check_fast(sell(2, 5), {Ack{2, 2, 0}}, lookup_in(book), 2).empty());
+  book[1] = 9;  // order 1 shrinks although this message has no event for it
+  auto bad = c.check_fast(Cancel{3, 99}, {}, lookup_in(book), book.size());
+  ASSERT_EQ(bad.size(), 1u);
+  EXPECT_NE(bad[0].find("order 1"), std::string::npos);
+}
+
+TEST(ConservationCheckerFast, DetectsAFinishedOrderThatReappearsLater) {
+  ConservationChecker c;
+  std::map<OrderId, Qty> book;
+  book[1] = 3;
+  ASSERT_TRUE(c.check_fast(sell(1, 3), {Ack{1, 1, 0}}, lookup_in(book), book.size()).empty());
+  book.erase(1);
+  ASSERT_TRUE(c.check_fast(Cancel{1, 1}, {Cancelled{1, 1, 3, CancelReason::User}}, lookup_in(book),
+                           book.size()).empty());
+  book[1] = 3;  // resurrected without any event: only the resting count can show it
+  auto bad = c.check_fast(Cancel{3, 99}, {}, lookup_in(book), book.size());
+  ASSERT_EQ(bad.size(), 1u);
+  EXPECT_NE(bad[0].find("resting orders"), std::string::npos);
+  EXPECT_FALSE(c.check(Cancel{3, 99}, {}, lookup_in(book)).empty());  // check() agrees
+}
+
+TEST(ConservationCheckerFast, DetectsACancelWithTheWrongQuantityAndOverfill) {
+  ConservationChecker c;
+  std::map<OrderId, Qty> book;
+  book[1] = 10;
+  ASSERT_TRUE(c.check_fast(sell(1, 10), {Ack{1, 1, 0}}, lookup_in(book), book.size()).empty());
+  book.erase(1);
+  auto bad = c.check_fast(Cancel{1, 1}, {Cancelled{1, 1, 7, CancelReason::User}}, lookup_in(book), book.size());
+  ASSERT_EQ(bad.size(), 1u);
+  EXPECT_NE(bad[0].find("Cancelled qty 7"), std::string::npos);
+
+  ConservationChecker d;
+  std::map<OrderId, Qty> book2;
+  book2[1] = 3;
+  ASSERT_TRUE(d.check_fast(sell(1, 3), {Ack{1, 1, 0}}, lookup_in(book2), book2.size()).empty());
+  NewOrder buy = sell(2, 5);
+  buy.side = Side::Buy;
+  EXPECT_FALSE(d.check_fast(buy, {Ack{2, 2, 0}, Trade{1, 100, 5, 1, 2, 1, 2, Side::Buy}}, lookup_in(book2),
+                            book2.size()).empty());
+}
