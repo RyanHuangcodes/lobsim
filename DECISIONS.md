@@ -30,3 +30,4 @@ One line per decision, with the reason. Section numbers refer to `SPEC.md`.
 - D-027 The modify `PostOnlyWouldCross` check applies only to post-only orders; a normal order modified to a crossing price trades as a taker.
 - D-028 `Cancelled.qty_cancelled` is the order's remaining quantity at that moment; `Trade.aggressor_side` is the taker's side.
 - D-029 FOK is valid only on limit orders (a market order must be IOC, Section 3.2), and a FOK that passes the dry run always fills completely, because execution walks the same orders the dry run counted.
+- D-030 A market, limit IOC or limit GTC taker stopped by `CancelTaking` gets `Cancelled(SelfTrade)` for its remainder: Section 3.4 states it without exception, so D-021's "limit IOC remainder is always IOCRemainder" applies only when STP did not stop it. (A FOK can never end this way: it either fails the dry run or fills before reaching its own order, D-029.)

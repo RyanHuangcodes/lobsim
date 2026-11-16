@@ -66,14 +66,23 @@ foreach(_t gtest gtest_main gmock benchmark nlohmann_json)
   endif()
 endforeach()
 
-add_library(lob INTERFACE)
-target_include_directories(lob INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_compile_features(lob INTERFACE cxx_std_20)
+add_library(lob STATIC src/lob/reference_book.cpp)
+target_include_directories(lob PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(lob PUBLIC cxx_std_20)
+target_link_libraries(lob PRIVATE lobsim_options)
 
 enable_testing()
 include(GoogleTest)
 
 add_executable(lob_tests
-  tests/unit/smoke_test.cpp)
+  tests/unit/smoke_test.cpp
+  tests/unit/matching_test.cpp
+  tests/unit/fok_postonly_test.cpp
+  tests/unit/validation_test.cpp
+  tests/unit/cancel_modify_test.cpp
+  tests/unit/stp_test.cpp
+  tests/unit/queries_test.cpp
+  tests/unit/conservation_test.cpp)
+target_include_directories(lob_tests PRIVATE tests)
 target_link_libraries(lob_tests PRIVATE lob lobsim_options GTest::gtest_main)
 gtest_discover_tests(lob_tests)
