@@ -5,8 +5,11 @@ One line per decision, with the reason. Section numbers refer to `SPEC.md`.
 ## Tooling and build
 - D-001 CMake comes from a project-local `.venv` (`uv pip install cmake`), not a system install: the machine had no CMake, and a local venv changes nothing outside the repo. The same venv holds pandas + matplotlib for `tools/plot.py`.
 - D-002 `CMakePresets.json` defines `debug`, `release` and `sanitize` (build dirs `build/<name>`): one short, identical command per configuration for every contributor and helper.
-- D-003 Sanitize = Debug + `-fsanitize=address,undefined -fno-sanitize-recover=undefined`: UBSan findings must fail the test run, not just print.
+- D-005 The presets file uses `"version": 3`, which needs CMake 3.21+: version 2 makes `generator` mandatory and we pin none. On exactly CMake 3.20 the project still builds with plain `cmake -S . -B <dir> -DCMAKE_BUILD_TYPE=...`.
+- D-003 Sanitize = Debug + `-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer`, applied globally so the dependencies are instrumented too: UBSan findings must fail the test run, not just print, and stack traces must be readable.
 - D-004 `BENCHMARK_ENABLE_WERROR OFF` and third-party targets treated as SYSTEM: "zero warnings" applies to our code; a newer compiler must not break a pinned dependency.
+- D-006 `LOBSIM_WERROR` (default ON) adds `-Werror` to our own targets: "zero warnings" (Section 8) is then enforced by every build instead of by reading logs.
+- D-007 With no `CMAKE_BUILD_TYPE` the build defaults to Release: a bare `cmake -S . -B build` should give the fast binaries the benchmarks describe.
 
 ## Matching engine API (Section 3 is silent on exact signatures)
 - D-010 Both books expose the same non-virtual member API (`submit`, `cancel`, `modify`, `best_bid`, `best_ask`, `best_level`, `depth`, `order`, `resting_orders`, `validate`) and tests are written once as typed tests over both: a virtual base would add an indirect call to the hot path for no benefit.
