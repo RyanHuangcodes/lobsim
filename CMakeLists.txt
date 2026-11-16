@@ -99,3 +99,21 @@ foreach(_first RANGE 1 181 20)
   math(EXPR _last "${_first} + 19")
   add_test(NAME fuzz_diff_seeds_${_first}_${_last} COMMAND fuzz_diff --first-seed ${_first} --seeds 20)
 endforeach()
+
+# Benchmarks (SPEC 7). Meaningful only in the release preset; the debug and sanitize
+# builds compile them and run a short smoke test of the throughput harness.
+add_executable(lobsim_bench apps/bench_main.cpp)
+target_link_libraries(lobsim_bench PRIVATE lob lobsim_options)
+string(TOUPPER "${CMAKE_BUILD_TYPE}" _lobsim_bt)
+set(_lobsim_flags "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${_lobsim_bt}} -std=c++20 -Wall -Wextra -Wpedantic")
+if(LOBSIM_SANITIZE)
+  string(APPEND _lobsim_flags " -fsanitize=address,undefined")
+endif()
+string(STRIP "${_lobsim_flags}" _lobsim_flags)
+target_compile_definitions(lobsim_bench PRIVATE
+  "LOBSIM_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\""
+  "LOBSIM_CXX_FLAGS=\"${_lobsim_flags}\"")
+add_test(NAME lobsim_bench_smoke COMMAND lobsim_bench --messages 20000 --ref-messages 2000)
+
+add_executable(micro_bench bench/micro_bench.cpp)
+target_link_libraries(micro_bench PRIVATE lob lobsim_options benchmark::benchmark_main)
