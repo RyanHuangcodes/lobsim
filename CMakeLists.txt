@@ -71,6 +71,22 @@ target_include_directories(lob PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(lob PUBLIC cxx_std_20)
 target_link_libraries(lob PRIVATE lobsim_options)
 
+# The simulator. It depends on lob; lob does not depend on it.
+add_library(sim STATIC
+  src/sim/config.cpp
+  src/sim/exchange.cpp
+  src/sim/noise_trader.cpp
+  src/sim/order_log.cpp
+  src/sim/simulator.cpp)
+target_link_libraries(sim PUBLIC lob nlohmann_json::nlohmann_json PRIVATE lobsim_options)
+# No fused multiply-add: floating-point results must not depend on the build type. PUBLIC,
+# because the generators and the fundamental value are inline in headers and are compiled
+# into whatever uses them.
+target_compile_options(sim PUBLIC -ffp-contract=off)
+
+add_executable(lobsim_run apps/run_main.cpp)
+target_link_libraries(lobsim_run PRIVATE sim lobsim_options)
+
 enable_testing()
 include(GoogleTest)
 
@@ -88,6 +104,23 @@ add_executable(lob_tests
 target_include_directories(lob_tests PRIVATE tests)
 target_link_libraries(lob_tests PRIVATE lob lobsim_options GTest::gtest_main)
 gtest_discover_tests(lob_tests)
+
+# Simulator tests (SPEC 5, 9 item 5). Every test is deterministic and writes no fixed file name.
+add_executable(sim_tests
+  tests/unit/sim_rng_test.cpp
+  tests/unit/sim_queue_test.cpp
+  tests/unit/sim_order_log_test.cpp
+  tests/unit/sim_config_test.cpp
+  tests/unit/sim_exchange_test.cpp
+  tests/unit/sim_kernel_test.cpp
+  tests/unit/sim_noise_trader_test.cpp
+  tests/unit/sim_integration_test.cpp
+  tests/determinism.cpp
+  tests/replay.cpp)
+target_include_directories(sim_tests PRIVATE tests)
+target_link_libraries(sim_tests PRIVATE sim lobsim_options GTest::gtest_main)
+target_compile_definitions(sim_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+gtest_discover_tests(sim_tests)
 
 # Differential fuzz test (SPEC 4): OrderBook vs ReferenceBook, event for event.
 add_executable(fuzz_diff tests/fuzz_diff.cpp)
