@@ -77,8 +77,10 @@ add_library(sim STATIC
   src/sim/config.cpp
   src/sim/exchange.cpp
   src/sim/informed_trader.cpp
+  src/sim/metrics.cpp
   src/sim/noise_trader.cpp
   src/sim/order_log.cpp
+  src/sim/replay.cpp
   src/sim/simulator.cpp)
 target_link_libraries(sim PUBLIC lob nlohmann_json::nlohmann_json PRIVATE lobsim_options)
 # No fused multiply-add: floating-point results must not depend on the build type. PUBLIC,
@@ -88,6 +90,9 @@ target_compile_options(sim PUBLIC -ffp-contract=off)
 
 add_executable(lobsim_run apps/run_main.cpp)
 target_link_libraries(lobsim_run PRIVATE sim lobsim_options)
+
+add_executable(lobsim_replay apps/replay_main.cpp)
+target_link_libraries(lobsim_replay PRIVATE sim lobsim_options)
 
 enable_testing()
 include(GoogleTest)
@@ -120,12 +125,21 @@ add_executable(sim_tests
   tests/unit/sim_as_market_maker_test.cpp
   tests/unit/sim_mm_integration_test.cpp
   tests/unit/sim_integration_test.cpp
+  tests/unit/sim_metrics_test.cpp
   tests/determinism.cpp
   tests/replay.cpp)
 target_include_directories(sim_tests PRIVATE tests)
 target_link_libraries(sim_tests PRIVATE sim lobsim_options GTest::gtest_main)
 target_compile_definitions(sim_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 gtest_discover_tests(sim_tests)
+
+# Command line: lobsim_run, then lobsim_replay on its log; the hash must match summary.json.
+add_test(NAME cli_run_then_replay
+  COMMAND ${CMAKE_COMMAND}
+    -DRUN=$<TARGET_FILE:lobsim_run> -DREPLAY=$<TARGET_FILE:lobsim_replay>
+    -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/configs/default.json
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/cli_run_then_replay
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_replay.cmake)
 
 # Differential fuzz test (SPEC 4): OrderBook vs ReferenceBook, event for event.
 add_executable(fuzz_diff tests/fuzz_diff.cpp)

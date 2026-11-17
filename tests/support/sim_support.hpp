@@ -14,6 +14,7 @@
 #include "lob/types.hpp"
 #include "sim/agent.hpp"
 #include "sim/config.hpp"
+#include "sim/metrics.hpp"
 #include "sim/simulator.hpp"
 
 namespace simtest {
@@ -67,6 +68,42 @@ inline RunResult run(const sim::SimConfig& cfg) {
   s.run();
   return {log.str(), s.exchange().event_hash(), s.exchange().requests(), s.exchange().trades(),
           s.exchange().book().resting_orders()};
+}
+
+// The five output files of lobsim_run, as text, from an in-process run with the metrics
+// observer attached (the same observer and writers the tool uses).
+struct RunFiles {
+  std::string orders_log, trades_csv, bbo_csv, mm_fills_csv, summary_json;
+  std::uint64_t hash{};
+};
+
+inline RunFiles run_with_metrics(const sim::SimConfig& cfg) {
+  std::ostringstream log;
+  sim::Simulator s(cfg, sim::SimulatorOptions{&log});
+  sim::MetricsObserver metrics(sim::make_metrics_options(s.config()));
+  s.add_observer(&metrics);
+  s.run();
+  RunFiles f;
+  f.orders_log = log.str();
+  f.hash = s.exchange().event_hash();
+  std::ostringstream trades, bbo, fills;
+  metrics.write_trades_csv(trades);
+  metrics.write_bbo_csv(bbo);
+  metrics.write_mm_fills_csv(fills);
+  f.trades_csv = trades.str();
+  f.bbo_csv = bbo.str();
+  f.mm_fills_csv = fills.str();
+  f.summary_json = metrics.summary_json(s.config(), f.hash);
+  return f;
+}
+
+// The default config shortened to 30 s with a 5 s warm-up (all three kinds of agent).
+inline sim::SimConfig default_config_for_files() {
+  sim::SimConfig c = default_config();
+  c.duration_s = 30;
+  c.warmup_s = 5;
+  sim::finalize(c);
+  return c;
 }
 
 // A scripted agent: sends `script[k]` at time `script[k].first` (times ascending) and

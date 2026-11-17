@@ -2,9 +2,9 @@
 //
 //   lobsim_run --config <file> [--seed N] [--duration-s X] --out <dir>
 //
-// Command-line flags override the config file. The wall clock is read here only, for the
+// Command-line flags override the config file. Writes orders.log, trades.csv, bbo.csv,
+// mm_fills.csv and summary.json into --out. The wall clock is read here only, for the
 // "elapsed" line on stdout: nothing derived from it goes into any output file.
-#include <algorithm>
 #include <chrono>
 #include <cinttypes>
 #include <cstdint>
@@ -13,50 +13,109 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
+#include <ostream>
 #include <string>
-#include <variant>
 
 #include "lob/events.hpp"
 #include "sim/agents/as_market_maker.hpp"
 #include "sim/config.hpp"
-#include "sim/observer.hpp"
+#include "sim/metrics.hpp"
 #include "sim/simulator.hpp"
 
 namespace {
 
-// The market maker's true position, from engine trade events (ground truth, not the
-// agent's beliefs). Read-only, like every observer.
-class MmTruth final : public sim::Observer {
- public:
-  explicit MmTruth(lob::OwnerId owner) : owner_(owner) {}
-  void on_engine_event(sim::TimeNs, const lob::Event& event) override {
-    const auto* t = std::get_if<lob::Trade>(&event);
-    if (t == nullptr) return;
-    if (t->maker_owner == owner_) add(lob::opposite(t->aggressor_side), t->qty);
-    if (t->taker_owner == owner_) add(t->aggressor_side, t->qty);
-  }
-  long long q{0}, max_abs_q{0}, buy_fills{0}, sell_fills{0}, bought{0}, sold{0};
-
- private:
-  void add(lob::Side side, lob::Qty qty) {
-    if (side == lob::Side::Buy) {
-      q += qty;
-      ++buy_fills;
-      bought += qty;
-    } else {
-      q -= qty;
-      ++sell_fills;
-      sold += qty;
-    }
-    max_abs_q = std::max(max_abs_q, q < 0 ? -q : q);
-  }
-  lob::OwnerId owner_;
-};
-
 int usage() {
   std::fprintf(stderr, "usage: lobsim_run --config <file> [--seed N] [--duration-s X] --out <dir>\n");
   return 2;
+}
+
+std::string opt(const std::optional<double>& v, const char* format = "%.4f") {
+  if (!v) return "n/a";
+  char buf[64];
+  std::snprintf(buf, sizeof buf, format, *v);
+  return buf;
+}
+
+std::string opt(const std::optional<std::int64_t>& v) { return v ? std::to_string(*v) : "n/a"; }
+
+void print_metrics(const sim::SimConfig& cfg, const sim::MetricsSummary& m) {
+  const sim::RunCounts& c = m.counts;
+  std::printf("window               warm-up %.1f s to %.1f s\n", cfg.warmup_s, cfg.duration_s);
+  std::printf("requests by type     %" PRIu64 " new, %" PRIu64 " cancel, %" PRIu64 " modify\n", c.requests_new,
+              c.requests_cancel, c.requests_modify);
+  std::printf("engine events        %" PRIu64 " ack, %" PRIu64 " reject, %" PRIu64 " trade, %" PRIu64
+              " cancelled, %" PRIu64 " modified\n",
+              c.ev_ack, c.ev_reject, c.ev_trade, c.ev_cancelled, c.ev_modified);
+  std::printf("traded volume        %lld lots\n", static_cast<long long>(c.traded_volume));
+  std::string rejects;
+  for (std::size_t r = 0; r < c.rejects.size(); ++r) {
+    if (c.rejects[r] == 0) continue;
+    rejects += (rejects.empty() ? "" : ", ") + std::string(lob::to_string(static_cast<lob::RejectReason>(r))) + " " +
+               std::to_string(c.rejects[r]);
+  }
+  std::printf("rejects              %s\n", rejects.empty() ? "none" : rejects.c_str());
+  static constexpr const char* names[sim::kRoleCount] = {"noise", "informed", "market maker"};
+  for (std::size_t r = 0; r < sim::kRoleCount; ++r) {
+    if (r == 1 && !cfg.informed) continue;
+    if (r == 2 && !cfg.mm) continue;
+    std::printf("role %-12s    %" PRIu64 " orders sent, taker volume %lld, maker volume %lld lots\n", names[r],
+                c.roles[r].orders_sent, static_cast<long long>(c.roles[r].taker_volume),
+                static_cast<long long>(c.roles[r].maker_volume));
+  }
+  if (m.has_mm) {
+    const auto& w = m.mm_window;
+    const auto& t = m.mm_total;
+    std::printf("mm window fills      %" PRIu64 " (%" PRIu64 " buy, %" PRIu64 " sell), volume %lld buy / %lld sell lots\n",
+                w.fills, w.buy_fills, w.sell_fills, static_cast<long long>(w.volume_buy),
+                static_cast<long long>(w.volume_sell));
+    std::printf("mm pnl after warm-up %.4f ticks, max |inventory| %lld lots\n", w.pnl_after_warmup,
+                static_cast<long long>(w.max_abs_inventory));
+    std::printf("mm quoting both     %s of the window, average quoted spread %s ticks\n",
+                opt(w.quoting_fraction, "%.4f").c_str(), opt(w.avg_quoted_spread).c_str());
+    std::printf("mm whole run         %" PRIu64 " fills, volume %lld buy / %lld sell lots, final inventory %lld, max |inventory| %lld\n",
+                t.fills, static_cast<long long>(t.volume_buy), static_cast<long long>(t.volume_sell),
+                static_cast<long long>(t.final_inventory), static_cast<long long>(t.max_abs_inventory));
+    std::printf("mm pnl total         %.4f ticks = cash %lld + inventory value %.4f - fees %.4f\n", t.pnl_total,
+                static_cast<long long>(t.cash), t.inventory_value, t.fees);
+    for (const sim::MarkoutStats& k : m.markouts)
+      std::printf("markout %gs  n %" PRIu64 " (skipped %" PRIu64 "), mean %s, sd %s, 95%% CI [%s, %s], qty-weighted %s ticks/lot\n",
+                  k.horizon_s, k.n, k.skipped, opt(k.mean).c_str(), opt(k.sd).c_str(), opt(k.ci_lo).c_str(),
+                  opt(k.ci_hi).c_str(), opt(k.mean_qty_weighted).c_str());
+    for (const sim::MarkoutStats& k : m.markouts) {
+      const sim::Decomposition& d = k.decomposition;
+      std::printf("  %gs = spread capture + mid move: n %" PRIu64 ", markout %s = %s + %s (mid move 95%% CI [%s, %s])\n",
+                  k.horizon_s, d.n, opt(d.markout_mean).c_str(), opt(d.spread_capture_mean).c_str(),
+                  opt(d.mid_move_mean).c_str(), opt(d.mid_move_ci_lo).c_str(), opt(d.mid_move_ci_hi).c_str());
+    }
+  }
+  const auto& sp = m.spread;
+  std::printf("spread (two-sided)   %s of the window; mean %s, median %s, p90 %s, p99 %s ticks\n",
+              opt(sp.two_sided_fraction).c_str(), opt(sp.mean).c_str(), opt(sp.median).c_str(), opt(sp.p90).c_str(),
+              opt(sp.p99).c_str());
+  const auto& r = m.returns;
+  std::printf("returns              %" PRIu64 " samples (%" PRIu64 " missing), %" PRIu64 " returns, sd %s, zero fraction %s, excess kurtosis %s\n",
+              r.samples, r.missing, r.returns, opt(r.sd, "%.3e").c_str(), opt(r.zero_fraction).c_str(),
+              opt(r.excess_kurtosis).c_str());
+  std::string acf, abs_acf;
+  for (const auto& v : r.acf) acf += (acf.empty() ? "" : " ") + opt(v, "%.3f");
+  for (const auto& v : r.abs_acf) abs_acf += (abs_acf.empty() ? "" : " ") + opt(v, "%.3f");
+  std::printf("return acf lag 1-5   %s\n", acf.c_str());
+  std::printf("|return| acf lag 1-10 %s\n", abs_acf.c_str());
+}
+
+bool write_file(const std::filesystem::path& path, const std::function<void(std::ostream&)>& body) {
+  std::ofstream f(path, std::ios::binary | std::ios::trunc);
+  if (f) {
+    body(f);
+    f.flush();
+  }
+  if (!f) {
+    std::fprintf(stderr, "lobsim_run: cannot write %s\n", path.string().c_str());
+    return false;
+  }
+  return true;
 }
 
 bool parse_u64(const char* s, std::uint64_t& out) {
@@ -117,11 +176,8 @@ int main(int argc, char** argv) {
     }
 
     sim::Simulator simulator(cfg, sim::SimulatorOptions{&log});
-    std::optional<MmTruth> mm_truth;
-    if (const auto mi = simulator.market_maker_index()) {
-      mm_truth.emplace(*mi + 1);
-      simulator.add_observer(&*mm_truth);
-    }
+    sim::MetricsObserver metrics(sim::make_metrics_options(simulator.config()));
+    simulator.add_observer(&metrics);
     const auto t0 = std::chrono::steady_clock::now();
     simulator.run();
     const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
@@ -146,14 +202,11 @@ int main(int argc, char** argv) {
     else std::printf("best ask             none\n");
     std::printf("fundamental value    %.4f after %" PRIu64 " steps\n", simulator.fundamental().value(),
                 simulator.fundamental().steps());
-    if (mm_truth) {
-      const auto& mm = dynamic_cast<const sim::AvellanedaStoikovMM&>(simulator.agent(*simulator.market_maker_index()));
-      const MmTruth& t = *mm_truth;
-      std::printf("mm final inventory   %lld lots (the agent believes %lld)\n", t.q, static_cast<long long>(mm.inventory()));
-      std::printf("mm max |inventory|   %lld lots (q_max + quote_size = %lld)\n", t.max_abs_q,
-                  static_cast<long long>(cfg.mm->q_max + cfg.mm->quote_size));
-      std::printf("mm fills             %lld buy (%lld lots), %lld sell (%lld lots)\n", t.buy_fills, t.bought,
-                  t.sell_fills, t.sold);
+    if (const auto mi = simulator.market_maker_index()) {
+      // What only the agent knows: its own counters and its belief about its inventory.
+      const auto& mm = dynamic_cast<const sim::AvellanedaStoikovMM&>(simulator.agent(*mi));
+      std::printf("mm final inventory   %lld lots (the agent believes %lld)\n",
+                  static_cast<long long>(metrics.mm_inventory()), static_cast<long long>(mm.inventory()));
       std::printf("mm requests          %" PRIu64 " new, %" PRIu64 " modify, %" PRIu64 " cancel\n", mm.news_sent(),
                   mm.modifies_sent(), mm.cancels_sent());
       std::string rejects;
@@ -166,10 +219,19 @@ int main(int argc, char** argv) {
       std::printf("mm rejects           %s\n", rejects.empty() ? "none" : rejects.c_str());
       std::printf("mm anomalies         %" PRIu64 "\n", mm.anomalies());
     }
+    print_metrics(cfg, metrics.summary());
+
+    const std::filesystem::path dir(out_dir);
+    const std::string summary = metrics.summary_json(cfg, ex.event_hash());
+    if (!write_file(dir / "trades.csv", [&](std::ostream& o) { metrics.write_trades_csv(o); }) ||
+        !write_file(dir / "bbo.csv", [&](std::ostream& o) { metrics.write_bbo_csv(o); }) ||
+        !write_file(dir / "mm_fills.csv", [&](std::ostream& o) { metrics.write_mm_fills_csv(o); }) ||
+        !write_file(dir / "summary.json", [&](std::ostream& o) { o << summary; }))
+      return 1;
     std::printf("simulator events     %" PRIu64 "\n", simulator.events_processed());
     std::printf("elapsed (wall clock) %.2f s, %.2f million simulator events per second\n", elapsed,
                 elapsed > 0 ? static_cast<double>(simulator.events_processed()) / elapsed / 1e6 : 0.0);
-    std::printf("wrote                %s\n", log_path.c_str());
+    std::printf("wrote                %s and trades.csv, bbo.csv, mm_fills.csv, summary.json\n", log_path.c_str());
   } catch (const std::exception& e) {
     std::fprintf(stderr, "lobsim_run: %s\n", e.what());
     return 1;

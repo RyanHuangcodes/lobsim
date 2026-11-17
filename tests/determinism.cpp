@@ -62,6 +62,57 @@ TEST(Determinism, DefaultConfigWithOptionalSectionsPresentIsStillDeterministic) 
 
 namespace {
 
+SimConfig default_for(std::uint64_t seed, double duration_s) {
+  SimConfig cfg = simtest::default_config();
+  cfg.seed = seed;
+  cfg.duration_s = duration_s;
+  cfg.warmup_s = 10;
+  finalize(cfg);
+  return cfg;
+}
+
+}  // namespace
+
+TEST(Determinism, TheFiveOutputFilesAreByteIdenticalForTheSameSeed) {
+  const simtest::RunFiles a = simtest::run_with_metrics(default_for(11, 60));
+  const simtest::RunFiles b = simtest::run_with_metrics(default_for(11, 60));
+  EXPECT_GT(a.trades_csv.size(), 1000u);
+  EXPECT_GT(a.mm_fills_csv.size(), 200u);
+  EXPECT_EQ(a.orders_log, b.orders_log);
+  EXPECT_EQ(a.trades_csv, b.trades_csv);
+  EXPECT_EQ(a.bbo_csv, b.bbo_csv);
+  EXPECT_EQ(a.mm_fills_csv, b.mm_fills_csv);
+  EXPECT_EQ(a.summary_json, b.summary_json);
+}
+
+TEST(Determinism, ADifferentSeedChangesEveryOutputFile) {
+  const simtest::RunFiles a = simtest::run_with_metrics(default_for(11, 60));
+  const simtest::RunFiles b = simtest::run_with_metrics(default_for(12, 60));
+  EXPECT_NE(a.orders_log, b.orders_log);
+  EXPECT_NE(a.trades_csv, b.trades_csv);
+  EXPECT_NE(a.bbo_csv, b.bbo_csv);
+  EXPECT_NE(a.mm_fills_csv, b.mm_fills_csv);
+  EXPECT_NE(a.summary_json, b.summary_json);
+}
+
+TEST(Determinism, AttachingTheMetricsObserverChangesNeitherTheHashNorTheOrderLog) {
+  const SimConfig cfg = default_for(11, 60);
+  const simtest::RunResult bare = simtest::run(cfg);
+  const simtest::RunFiles observed = simtest::run_with_metrics(cfg);
+  EXPECT_EQ(bare.hash, observed.hash);
+  EXPECT_EQ(bare.log, observed.orders_log);
+}
+
+TEST(Determinism, TheSummaryHoldsNoWallClockPathOrHostName) {
+  const simtest::RunFiles f = simtest::run_with_metrics(default_for(11, 20));
+  EXPECT_EQ(f.summary_json.back(), '\n');
+  EXPECT_EQ(f.summary_json.find('/'), std::string::npos) << "no path in the summary";
+  EXPECT_EQ(f.summary_json.find("elapsed"), std::string::npos);
+  EXPECT_NE(f.summary_json.find("\"engine_event_hash\": \""), std::string::npos);
+}
+
+namespace {
+
 void expect_common_prefix_equal(const simtest::RunResult& small, const simtest::RunResult& big, std::uint32_t n) {
   EXPECT_NE(small.hash, big.hash) << "the extra trader does trade";
   const auto a = projection(small.log, n);
