@@ -15,7 +15,7 @@ cmake --build --preset release -j
 ./build/release/micro_bench
 ```
 
-Machine and build, as printed by the harness: Apple M4; clang 17.0.0 (clang-1700.0.13.5); Release; flags: -O3 -DNDEBUG -std=c++20 -Wall -Wextra -Wpedantic
+Machine and build, as printed by the harness: Apple M4; clang 17.0.0 (clang-1700.0.13.5); Release; flags: -O3 -DNDEBUG -std=c++20 -Wall -Wextra -Wpedantic -Werror
 
 ### Throughput harness (`lobsim_bench`)
 

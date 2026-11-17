@@ -614,19 +614,29 @@ int main(int argc, char** argv) {
   std::printf("  book at the end: %zu resting orders on %zu bid and %zu ask levels\n\n", one.resting_at_end,
               one.bid_levels, one.ask_levels);
 
-  const bool timer_significant = timer.median_pair_ns > 0.1 * p_one.p50 || timer.step_ns > 0.1 * p_one.p50;
+  // The timer matters if its step or the cost of a pair of reads is not small next to the
+  // time of one message (taken from the block-timed pass, which the timer barely affects).
+  const double per_message_ns = mean_ns(thr);
+  const bool timer_significant = timer.median_pair_ns > 0.1 * per_message_ns || timer.step_ns > 0.1 * per_message_ns;
   std::printf("timer (std::chrono::steady_clock)\n");
   std::printf("  back-to-back pair of reads: min %.0f ns, median %.0f ns; one read costs about %.1f ns; smallest\n"
               "  non-zero step %.0f ns\n",
               timer.min_pair_ns, timer.median_pair_ns, timer.mean_read_ns, timer.step_ns);
-  std::printf("  %s\n\n",
-              timer_significant
-                  ? "This is SIGNIFICANT next to the per-message p50: one message takes less than one timer step, so a\n"
-                    "  per-message sample is 0, one step or two steps, never the true value. Use the block-timed\n"
-                    "  throughput for the average cost and the batch-of-32 row for the body of the distribution. The\n"
-                    "  per-message row is the one to read for the far tail and the maximum, where one step no longer\n"
-                    "  matters."
-                  : "This is small next to the per-message p50, so the per-message samples can be read directly.");
+  if (!timer_significant) {
+    std::printf("  This is small next to the block-timed mean of %.1f ns per message, so the per-message samples can\n"
+                "  be read directly.\n\n",
+                per_message_ns);
+  } else {
+    std::printf("  This is SIGNIFICANT next to the block-timed mean of %.1f ns per message.\n", per_message_ns);
+    if (per_message_ns < timer.step_ns)
+      std::printf("  One message takes less than one timer step, so a per-message sample is a whole number of steps\n"
+                  "  (often 0) and never the true value.\n");
+    else
+      std::printf("  A per-message sample is rounded to the timer step and includes part of the timer's own cost.\n");
+    std::printf("  Use the block-timed throughput for the average cost and the batch-of-32 row for the body of the\n"
+                "  distribution. The per-message row is the one to read for the far tail and the maximum, where\n"
+                "  the timer no longer matters.\n\n");
+  }
 
   std::printf("ReferenceBook, first %" PRIu64 " messages of the same stream\n", ref_messages);
   std::printf("  throughput (timed per block of %zu)          %.3f million msgs/s   (mean %.1f ns per message)\n",
