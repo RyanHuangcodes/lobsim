@@ -4,6 +4,8 @@
 #include <utility>
 #include <variant>
 
+#include "sim/agents/as_market_maker.hpp"
+#include "sim/agents/informed_trader.hpp"
 #include "sim/agents/noise_trader.hpp"
 
 namespace sim {
@@ -60,13 +62,34 @@ Simulator::Simulator(const SimConfig& cfg, Options options)
   np.max_size = cfg_.noise_traders.max_size;
   np.initial_price = cfg_.initial_price;
   np.max_price = cfg_.max_price;
+  np.reference_price = cfg_.noise_traders.reference_price;
   for (std::uint32_t i = 0; i < cfg_.noise_traders.count; ++i) {
     add_agent(std::make_unique<NoiseTrader>(
                   np, make_stream(cfg_.seed, StreamRole::NoiseTrader, i, StreamPurpose::Lifetimes)),
               cfg_.noise_traders.latency, StreamRole::NoiseTrader, i);
   }
-  // The informed trader and the market maker are created here, in that order, from the
-  // optional `informed` and `mm` config sections.
+  // The informed trader, then the market maker, from the optional `informed` and `mm`
+  // sections.
+  if (cfg_.informed) {
+    const InformedConfig& ic = *cfg_.informed;
+    InformedTraderParams ip;
+    ip.lambda = ic.lambda;
+    ip.theta_ticks = ic.theta_ticks;
+    ip.size = ic.size;
+    add_agent(std::make_unique<InformedTrader>(ip, fundamental_), ic.latency, StreamRole::InformedTrader, 0);
+  }
+  if (cfg_.mm) {
+    const MarketMakerConfig& mc = *cfg_.mm;
+    MmParams mp;
+    mp.gamma = mc.gamma;
+    mp.kappa = mc.kappa;
+    mp.sigma = mc.sigma_ticks_per_sqrt_s;
+    mp.quote_size = mc.quote_size;
+    mp.q_max = mc.q_max;
+    mp.max_price = cfg_.max_price;
+    market_maker_ = add_agent(std::make_unique<AvellanedaStoikovMM>(mp, cfg_.requote_interval_ns, cfg_.duration_ns),
+                              mc.latency, StreamRole::MarketMaker, 0);
+  }
 }
 
 Simulator::~Simulator() = default;

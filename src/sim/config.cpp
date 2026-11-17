@@ -113,7 +113,8 @@ SimConfig parse_config(const json& j) {
   {
     const std::string w = "noise_traders";
     const json& n = at(j, "", "noise_traders");
-    check_keys(n, w, {"count", "lambda", "p_limit", "order_lifetime_mean_s", "D", "max_size", "latency_us"});
+    check_keys(n, w, {"count", "lambda", "p_limit", "order_lifetime_mean_s", "D", "max_size", "latency_us",
+                     "reference_price"});
     const std::int64_t count = integer(n, w, "count");
     if (count < 0 || count > 1'000'000) bad(w + ".count", "must be between 0 and 1000000");
     c.noise_traders.count = static_cast<std::uint32_t>(count);
@@ -123,6 +124,14 @@ SimConfig parse_config(const json& j) {
     c.noise_traders.D = integer(n, w, "D");
     c.noise_traders.max_size = integer(n, w, "max_size");
     c.noise_traders.latency = latency(n, w);
+    if (const auto it = n.find("reference_price"); it != n.end()) {
+      const std::string field = w + ".reference_price";
+      if (!it->is_string()) bad(field, "must be \"floor\" or \"symmetric\"");
+      const std::string v = it->get<std::string>();
+      if (v == "floor") c.noise_traders.reference_price = ReferencePrice::Floor;
+      else if (v == "symmetric") c.noise_traders.reference_price = ReferencePrice::Symmetric;
+      else bad(field, "must be \"floor\" or \"symmetric\"");
+    }
   }
   if (j.contains("informed")) {
     const std::string w = "informed";
@@ -248,6 +257,7 @@ json to_json(const SimConfig& c) {
   j["tick_display"] = c.tick_display;
   j["fundamental"] = {{"sigma_ticks_per_sqrt_s", c.fundamental.sigma_ticks_per_sqrt_s}, {"dt_s", c.fundamental.dt_s}};
   j["noise_traders"] = {{"count", c.noise_traders.count},
+                        {"reference_price", c.noise_traders.reference_price == ReferencePrice::Symmetric ? "symmetric" : "floor"},
                         {"lambda", c.noise_traders.lambda},
                         {"p_limit", c.noise_traders.p_limit},
                         {"order_lifetime_mean_s", c.noise_traders.order_lifetime_mean_s},

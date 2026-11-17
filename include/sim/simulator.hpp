@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <iosfwd>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "sim/agent.hpp"
@@ -64,6 +65,8 @@ class Simulator {
   Agent& agent(AgentIndex i);
   const Agent& agent(AgentIndex i) const;
   std::uint64_t events_processed() const noexcept { return processed_; }
+  // Index of the market maker created from the config's `mm` section, if there is one.
+  std::optional<AgentIndex> market_maker_index() const noexcept { return market_maker_; }
 
  private:
   class AgentContext;
@@ -82,6 +85,7 @@ class Simulator {
   std::uint64_t fundamental_k_{1};
   std::uint64_t sample_k_{1};
   std::uint64_t processed_{0};
+  std::optional<AgentIndex> market_maker_;
   bool ran_{false};
 };
 

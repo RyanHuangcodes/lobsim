@@ -53,7 +53,7 @@ TEST(Determinism, DifferentSeedGivesADifferentRun) {
 }
 
 TEST(Determinism, DefaultConfigWithOptionalSectionsPresentIsStillDeterministic) {
-  SimConfig cfg = simtest::default_config();  // informed and mm sections present, no agent yet
+  SimConfig cfg = simtest::default_config();  // with the informed trader and the market maker
   cfg.duration_s = 20;
   cfg.warmup_s = 0;
   finalize(cfg);
@@ -99,4 +99,56 @@ TEST(Determinism, AddingANoiseTraderDoesNotChangeTheOthersDecisionsUnderHugeJitt
   constexpr TimeNs jitter = 300'000'000;
   expect_common_prefix_equal(simtest::run(with_jitter(n, 7, 60.0, jitter)),
                              simtest::run(with_jitter(n + 1, 7, 60.0, jitter)), n);
+}
+
+namespace {
+
+// Runs the default config (all agents, 60 s, warm-up 0) with and without one optional section and
+// checks that every noise trader's own NewOrder decisions agree on their common prefix.
+void expect_noise_decisions_unchanged(bool drop_mm, bool drop_informed, TimeNs jitter_ns) {
+  SimConfig with = simtest::default_config();
+  with.duration_s = 60.0;
+  with.warmup_s = 0;
+  if (jitter_ns > 0) {
+    with.noise_traders.latency.jitter = jitter_ns;
+    if (with.informed) with.informed->latency.jitter = jitter_ns;
+    if (with.mm) with.mm->latency.jitter = jitter_ns;
+  }
+  finalize(with);
+  SimConfig without = with;
+  if (drop_mm) without.mm.reset();
+  if (drop_informed) without.informed.reset();
+  finalize(without);
+
+  const simtest::RunResult a = simtest::run(without);
+  const simtest::RunResult b = simtest::run(with);
+  EXPECT_NE(a.hash, b.hash) << "the extra agent does trade";
+  const std::uint32_t n = with.noise_traders.count;
+  const auto pa = projection(a.log, n);
+  const auto pb = projection(b.log, n);
+  for (std::size_t owner = 1; owner <= n; ++owner) {
+    const std::size_t common = std::min(pa[owner].size(), pb[owner].size());
+    ASSERT_GT(common, 50u) << "owner " << owner;
+    for (std::size_t i = 0; i < common; ++i) ASSERT_EQ(pa[owner][i], pb[owner][i]) << "owner " << owner << " line " << i;
+  }
+}
+
+constexpr TimeNs kHugeJitter = 300'000'000;
+
+}  // namespace
+
+TEST(Determinism, AddingTheMarketMakerDoesNotChangeTheNoiseTradersDecisions) {
+  expect_noise_decisions_unchanged(true, false, 0);
+}
+
+TEST(Determinism, AddingTheMarketMakerDoesNotChangeTheNoiseTradersDecisionsUnderHugeJitter) {
+  expect_noise_decisions_unchanged(true, false, kHugeJitter);
+}
+
+TEST(Determinism, AddingTheInformedTraderDoesNotChangeTheNoiseTradersDecisions) {
+  expect_noise_decisions_unchanged(false, true, 0);
+}
+
+TEST(Determinism, AddingTheInformedTraderDoesNotChangeTheNoiseTradersDecisionsUnderHugeJitter) {
+  expect_noise_decisions_unchanged(false, true, kHugeJitter);
 }

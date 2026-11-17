@@ -5,38 +5,13 @@
 #include <vector>
 
 #include "sim/agents/noise_trader.hpp"
+#include "support/fake_context.hpp"
 
 using namespace sim;
 
 namespace {
 
-// A scripted Context: records what the agent does and lets the test fire its wakeups.
-class FakeCtx final : public Context {
- public:
-  explicit FakeCtx(std::uint64_t seed) : r(seed) {}
-  TimeNs t{0};
-  Xoshiro256StarStar r;
-  std::vector<lob::Request> sent;
-  std::vector<TimeNs> pending;  // wakeups not yet fired
-
-  TimeNs now() const override { return t; }
-  void send(const lob::Request& q) override { sent.push_back(q); }
-  void schedule_wakeup(TimeNs at) override {
-    EXPECT_GE(at, t);
-    pending.push_back(at);
-  }
-  Xoshiro256StarStar& rng() override { return r; }
-  lob::OwnerId self() const override { return 7; }
-
-  TimeNs earliest() const { return *std::min_element(pending.begin(), pending.end()); }
-  // Fires the earliest pending wakeup (the kernel would: time, then scheduling order).
-  void fire(Agent& a) {
-    const auto it = std::min_element(pending.begin(), pending.end());
-    t = *it;
-    pending.erase(it);
-    a.on_wakeup(*this);
-  }
-};
+using simtest::FakeCtx;
 
 NoiseTraderParams params() {
   NoiseTraderParams p;
@@ -292,4 +267,120 @@ TEST(NoiseTrader, WakeupWithoutATimerThrows) {
   NoiseTrader nt(params(), Xoshiro256StarStar(1));
   FakeCtx ctx(1);
   EXPECT_THROW(nt.on_wakeup(ctx), std::logic_error);
+}
+
+namespace {
+
+// Runs `n` wakeups of a limit-only trader with the given mode and BBO (if any, and a last
+// trade if any); returns the orders and the final generator state.
+struct Sent {
+  std::vector<lob::NewOrder> orders;
+  Xoshiro256StarStar rng;
+};
+
+Sent run_mode(ReferencePrice mode, const BBO* bbo, const TradePrint* trade, int n = 80) {
+  NoiseTraderParams p = params();
+  p.D = 5;
+  p.max_price = 100'000;
+  p.reference_price = mode;
+  NoiseTrader nt(p, Xoshiro256StarStar(1));
+  FakeCtx ctx(31);
+  nt.on_start(ctx);
+  if (trade) nt.on_market_data(ctx, *trade);
+  if (bbo) nt.on_market_data(ctx, *bbo);
+  for (int i = 0; i < n; ++i) ctx.fire(nt);
+  Sent out{{}, ctx.r};
+  for (const lob::Request& r : ctx.sent) out.orders.push_back(new_order(r));
+  return out;
+}
+
+}  // namespace
+
+TEST(NoiseTraderReference, EvenSpreadGivesTheSamePricesInBothModes) {
+  const BBO bbo{9880, 3, 9882, 3};  // integer mid 9881
+  const Sent f = run_mode(ReferencePrice::Floor, &bbo, nullptr);
+  const Sent s = run_mode(ReferencePrice::Symmetric, &bbo, nullptr);
+  ASSERT_EQ(f.orders.size(), s.orders.size());
+  for (std::size_t i = 0; i < f.orders.size(); ++i) {
+    EXPECT_EQ(f.orders[i].side, s.orders[i].side);
+    EXPECT_EQ(f.orders[i].price, s.orders[i].price) << i;
+  }
+}
+
+TEST(NoiseTraderReference, OddSpreadFloorUsesFloorMidSymmetricUsesCeilForBuys) {
+  const BBO bbo{9879, 3, 9882, 3};  // mid 9880.5
+  const Sent f = run_mode(ReferencePrice::Floor, &bbo, nullptr);
+  const Sent s = run_mode(ReferencePrice::Symmetric, &bbo, nullptr);
+  ASSERT_EQ(f.orders.size(), s.orders.size());
+  bool buy = false, sell = false;
+  for (std::size_t i = 0; i < f.orders.size(); ++i) {
+    ASSERT_EQ(f.orders[i].side, s.orders[i].side);
+    if (f.orders[i].side == lob::Side::Buy) {
+      const lob::Price d = 9880 - f.orders[i].price;  // Floor: 9880 - d
+      EXPECT_GE(d, 1);
+      EXPECT_LE(d, 5);
+      EXPECT_EQ(s.orders[i].price, 9881 - d);
+      buy = true;
+    } else {
+      const lob::Price d = f.orders[i].price - 9880;  // Floor: 9880 + d
+      EXPECT_GE(d, 1);
+      EXPECT_LE(d, 5);
+      EXPECT_EQ(s.orders[i].price, 9880 + d);
+      sell = true;
+    }
+  }
+  EXPECT_TRUE(buy && sell);
+}
+
+TEST(NoiseTraderReference, SymmetricWithSpreadOneAndDOneJoinsTheBestPricesAndNeverCrosses) {
+  const BBO bbo{100, 4, 101, 4};
+  NoiseTraderParams p = params();  // D = 1
+  p.reference_price = ReferencePrice::Symmetric;
+  NoiseTrader nt(p, Xoshiro256StarStar(1));
+  FakeCtx ctx(17);
+  nt.on_start(ctx);
+  nt.on_market_data(ctx, bbo);
+  for (int i = 0; i < 60; ++i) ctx.fire(nt);
+  bool buy = false, sell = false;
+  for (const lob::Request& r : ctx.sent) {
+    const lob::NewOrder& o = new_order(r);
+    if (o.side == lob::Side::Buy) {
+      EXPECT_EQ(o.price, 100);
+      buy = true;
+    } else {
+      EXPECT_EQ(o.price, 101);
+      sell = true;
+    }
+  }
+  EXPECT_TRUE(buy && sell);
+}
+
+TEST(NoiseTraderReference, FallbacksAreTheSameInBothModes) {
+  const TradePrint trade{480, 2, lob::Side::Sell};
+  const BBO one_sided{100, 5, 0, 0};
+  for (const BBO* bbo : {static_cast<const BBO*>(nullptr), &one_sided}) {
+    for (const TradePrint* t : {static_cast<const TradePrint*>(nullptr), &trade}) {
+      const Sent f = run_mode(ReferencePrice::Floor, bbo, t);
+      const Sent s = run_mode(ReferencePrice::Symmetric, bbo, t);
+      ASSERT_EQ(f.orders.size(), s.orders.size());
+      for (std::size_t i = 0; i < f.orders.size(); ++i) EXPECT_EQ(f.orders[i].price, s.orders[i].price);
+      const lob::Price ref = t ? 480 : 500;  // last trade, else initial price
+      for (const lob::NewOrder& o : s.orders) {
+        if (o.side == lob::Side::Buy) EXPECT_LT(o.price, ref);
+        else EXPECT_GT(o.price, ref);
+      }
+    }
+  }
+}
+
+TEST(NoiseTraderReference, DrawSequenceIsIdenticalInBothModes) {
+  const BBO bbo{9879, 3, 9882, 3};
+  const Sent f = run_mode(ReferencePrice::Floor, &bbo, nullptr);
+  const Sent s = run_mode(ReferencePrice::Symmetric, &bbo, nullptr);
+  EXPECT_EQ(f.rng, s.rng);
+  ASSERT_EQ(f.orders.size(), s.orders.size());
+  for (std::size_t i = 0; i < f.orders.size(); ++i) {
+    EXPECT_EQ(f.orders[i].side, s.orders[i].side);
+    EXPECT_EQ(f.orders[i].qty, s.orders[i].qty);
+  }
 }

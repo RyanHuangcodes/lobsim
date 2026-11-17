@@ -54,7 +54,31 @@ TEST(Config, DefaultMatchesSpecValues) {
 TEST(Config, ShippedFileMatchesTheSpecJson) {
   // configs/default.json is read from the source tree through the compile definition.
   const SimConfig a = load_config(std::string(LOBSIM_SOURCE_DIR) + "/configs/default.json");
-  EXPECT_EQ(to_json(a), to_json(simtest::default_config()));
+  // The file is the SPEC 5.8 JSON plus exactly one deliberate departure: the noise traders
+  // use the symmetric reference price (the spec's floor rule makes the price drift down
+  // by a rounding artefact, see DECISIONS.md). Everything else must equal the spec.
+  json expected = simtest::default_json();
+  expected["noise_traders"]["reference_price"] = "symmetric";
+  EXPECT_EQ(to_json(a), to_json(parse_config(expected)));
+  EXPECT_EQ(a.noise_traders.reference_price, ReferencePrice::Symmetric);
+  EXPECT_EQ(simtest::default_config().noise_traders.reference_price, ReferencePrice::Floor);
+}
+
+TEST(Config, NoiseReferencePriceIsOptionalAndValidated) {
+  json j = simtest::default_json();
+  ASSERT_FALSE(j["noise_traders"].contains("reference_price"));
+  EXPECT_EQ(parse_config(j).noise_traders.reference_price, ReferencePrice::Floor);
+  EXPECT_EQ(to_json(parse_config(j))["noise_traders"]["reference_price"], "floor");
+  j["noise_traders"]["reference_price"] = "floor";
+  EXPECT_EQ(parse_config(j).noise_traders.reference_price, ReferencePrice::Floor);
+  j["noise_traders"]["reference_price"] = "symmetric";
+  const SimConfig c = parse_config(j);
+  EXPECT_EQ(c.noise_traders.reference_price, ReferencePrice::Symmetric);
+  EXPECT_EQ(to_json(c)["noise_traders"]["reference_price"], "symmetric");
+  EXPECT_EQ(parse_config(to_json(c)).noise_traders.reference_price, ReferencePrice::Symmetric);
+  expect_error([](json& x) { x["noise_traders"]["reference_price"] = "ceil"; }, "noise_traders.reference_price");
+  expect_error([](json& x) { x["noise_traders"]["reference_price"] = 1; }, "noise_traders.reference_price");
+  expect_error([](json& x) { x["noise_traders"]["reference_price"] = "Floor"; }, "noise_traders.reference_price");
 }
 
 TEST(Config, ToJsonRoundTrips) {

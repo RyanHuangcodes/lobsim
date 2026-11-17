@@ -10,6 +10,7 @@
 #include "lob/types.hpp"
 #include "sim/latency.hpp"
 #include "sim/messages.hpp"
+#include "sim/reference_price.hpp"
 
 namespace sim {
 
@@ -19,6 +20,7 @@ struct FundamentalConfig {
 };
 
 struct NoiseTradersConfig {
+  ReferencePrice reference_price{ReferencePrice::Floor};  // optional key; absent means Floor (SPEC 5.6)
   std::uint32_t count{0};
   double lambda{5.0};  // wakeups per second, per trader
   double p_limit{0.85};

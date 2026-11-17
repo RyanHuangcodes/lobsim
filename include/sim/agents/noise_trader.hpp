@@ -9,6 +9,7 @@
 #include "lob/types.hpp"
 #include "sim/agent.hpp"
 #include "sim/messages.hpp"
+#include "sim/reference_price.hpp"
 #include "sim/rng.hpp"
 #include "sim/timer_queue.hpp"
 
@@ -22,6 +23,7 @@ struct NoiseTraderParams {
   lob::Qty max_size{10};              // size is uniform in [1, max_size] lots
   lob::Price initial_price{10'000};
   lob::Price max_price{1'000'000};
+  ReferencePrice reference_price{ReferencePrice::Floor};
 };
 
 // Zero-intelligence trader (SPEC 5.6 item 1, after Smith, Farmer et al.).
@@ -47,6 +49,9 @@ class NoiseTrader : public Agent {
 
   // Read-only views for tests and metrics.
   lob::Price reference_price() const;
+  // Reference for a buy limit order: ceil(mid) in Symmetric mode with a two-sided BBO,
+  // otherwise the same as reference_price().
+  lob::Price buy_reference_price() const;
   const BBO& local_bbo() const noexcept { return bbo_; }
   std::size_t open_orders() const noexcept { return open_.size(); }
   std::uint64_t limit_orders_sent() const noexcept { return limits_sent_; }

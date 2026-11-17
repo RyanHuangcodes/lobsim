@@ -34,6 +34,11 @@ lob::Price NoiseTrader::reference_price() const {
   return p_.initial_price;
 }
 
+lob::Price NoiseTrader::buy_reference_price() const {
+  if (p_.reference_price == ReferencePrice::Symmetric && bbo_.two_sided()) return (bbo_.bid + bbo_.ask + 1) / 2;
+  return reference_price();
+}
+
 void NoiseTrader::trade(Context& ctx) {
   Xoshiro256StarStar& rng = ctx.rng();
   const bool is_limit = rng.uniform01() < p_.p_limit;
@@ -50,8 +55,8 @@ void NoiseTrader::trade(Context& ctx) {
     ++markets_sent_;
     return;
   }
-  const lob::Price ref = reference_price();
-  const lob::Price price = std::clamp<lob::Price>(side == lob::Side::Buy ? ref - d : ref + d, 1, p_.max_price);
+  const lob::Price price = std::clamp<lob::Price>(
+      side == lob::Side::Buy ? buy_reference_price() - d : reference_price() + d, 1, p_.max_price);
   awaiting_ack_[client_id] = size;
   ctx.send(lob::NewOrder{ctx.self(), client_id, side, lob::OrderType::Limit, lob::TIF::GTC, price, size, false,
                          lob::STP::CancelTaking});

@@ -73,8 +73,10 @@ target_link_libraries(lob PRIVATE lobsim_options)
 
 # The simulator. It depends on lob; lob does not depend on it.
 add_library(sim STATIC
+  src/sim/as_market_maker.cpp
   src/sim/config.cpp
   src/sim/exchange.cpp
+  src/sim/informed_trader.cpp
   src/sim/noise_trader.cpp
   src/sim/order_log.cpp
   src/sim/simulator.cpp)
@@ -114,6 +116,9 @@ add_executable(sim_tests
   tests/unit/sim_exchange_test.cpp
   tests/unit/sim_kernel_test.cpp
   tests/unit/sim_noise_trader_test.cpp
+  tests/unit/sim_informed_trader_test.cpp
+  tests/unit/sim_as_market_maker_test.cpp
+  tests/unit/sim_mm_integration_test.cpp
   tests/unit/sim_integration_test.cpp
   tests/determinism.cpp
   tests/replay.cpp)
