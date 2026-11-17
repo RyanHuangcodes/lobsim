@@ -224,11 +224,33 @@ void BM_BestPrices(benchmark::State& state) {
   }
 }
 
+// Calibration: what the batching pattern above costs by itself. Both run the same empty
+// operation in batches of kBatch; the first also pauses and resumes the timer once per
+// batch, as five of the benchmarks above do. The difference between the two is the timer
+// overhead included in each per-operation time of those five benchmarks.
+void BM_CalibrationEmptyBatchWithPause(benchmark::State& state) {
+  std::uint64_t x = 0;
+  while (state.KeepRunningBatch(static_cast<benchmark::IterationCount>(kBatch))) {
+    for (std::size_t i = 0; i < kBatch; ++i) benchmark::DoNotOptimize(x += i);
+    state.PauseTiming();
+    state.ResumeTiming();
+  }
+}
+
+void BM_CalibrationEmptyBatchWithoutPause(benchmark::State& state) {
+  std::uint64_t x = 0;
+  while (state.KeepRunningBatch(static_cast<benchmark::IterationCount>(kBatch))) {
+    for (std::size_t i = 0; i < kBatch; ++i) benchmark::DoNotOptimize(x += i);
+  }
+}
+
 BENCHMARK(BM_AddExistingLevel)->Arg(1000)->Arg(100000);
 BENCHMARK(BM_AddNewLevel)->Arg(1000)->Arg(100000);
 BENCHMARK(BM_Cancel)->Arg(1000)->Arg(100000);
 BENCHMARK(BM_MatchOneLevel)->Arg(1000)->Arg(100000);
 BENCHMARK(BM_ModifyReduce)->Arg(1000)->Arg(100000);
 BENCHMARK(BM_BestPrices)->Arg(1000)->Arg(100000);
+BENCHMARK(BM_CalibrationEmptyBatchWithPause);
+BENCHMARK(BM_CalibrationEmptyBatchWithoutPause);
 
 }  // namespace
