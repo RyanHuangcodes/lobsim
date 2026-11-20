@@ -108,6 +108,7 @@ void Replayer::check_burst(const Entry& first, Source& source) {
   const lob::Side resting = head.direction > 0 ? lob::Side::Buy : lob::Side::Sell;
   std::unordered_map<lob::OrderId, lob::Qty> taken;
   std::vector<BurstFill> data;
+  lob::OrderId last_synthetic = 0;  // the synthetic order the last data fill is attributed to; 0 when it is not
   bool unknown = false;  // also set when a size sum does not fit in 64 bits: the burst cannot be predicted
   std::set<std::int64_t> prices;
   lob::Qty qty = 0;
@@ -126,6 +127,7 @@ void Replayer::check_burst(const Entry& first, Source& source) {
           unknown = true;
         }
         data.push_back(BurstFill{false, m.order_id, m.price, m.size});
+        last_synthetic = 0;
         continue;
       }
     }
@@ -133,7 +135,15 @@ void Replayer::check_burst(const Entry& first, Source& source) {
     for (const lob::OrderView& o : book_.level_orders(resting, m.price)) {
       if (synthetic_.count(o.id) == 0 || o.remaining - taken[o.id] < m.size) continue;
       if (__builtin_add_overflow(taken[o.id], m.size, &taken[o.id])) unknown = true;
-      data.push_back(BurstFill{true, 0, m.price, m.size});
+      // Consecutive messages attributed to the same synthetic order are one fill of that order:
+      // the data cannot say how a seeded quantity was split, the engine fills it in one piece
+      // (never merged for real orders: their ids are known).
+      if (last_synthetic == o.id) {
+        data.back().size += m.size;  // fits: the sum was checked against `taken` just above
+      } else {
+        data.push_back(BurstFill{true, 0, m.price, m.size});
+      }
+      last_synthetic = o.id;
       attributed = true;
       break;
     }

@@ -340,6 +340,80 @@ TEST(MatchingBurst, AgreementRateIsAgreeOverScored) {
   EXPECT_EQ(c.scored(), 7u);  // 9 bursts - 1 excluded_unknown - 1 excluded_untrusted
 }
 
+// ---- synthetic fills of one order are merged before the comparison (D4)
+//
+// Three levels, resync mode, every row exact. A row is "ask price, ask size, bid price, bid size" per
+// level; the helper below writes level 1 and pads the other two levels as empty.
+
+std::string row3(const std::string& ask, const std::string& bid) {
+  const std::string none_ask = "9999999999,0", none_bid = "-9999999999,0";
+  return (ask.empty() ? none_ask : ask) + "," + (bid.empty() ? none_bid : bid) + "," + none_ask + "," + none_bid +
+         "," + none_ask + "," + none_bid + "\n";
+}
+
+TEST(MatchingMerge, TwoUnknownIdsInsideOneSeededLevelAreOneSyntheticFill) {
+  // Message 1 is consumed by the seed: one synthetic ask of 30 at 100. The burst (lines 2-3) executes
+  // unknown ids 777 (10) and 778 (20), both attributed to that synthetic order. The engine fills it
+  // in one piece: SYN 30 @ 100. Without the merge the data would be two fills against one.
+  const std::string messages = "34200.000000001,1,1,30,100,-1\n"
+                               "34200.000000002,4,777,10,100,-1\n"
+                               "34200.000000002,4,778,20,100,-1\n";
+  const std::string book = row3("100,30", "") + row3("100,20", "") + row3("", "");
+  const replay::Summary s = run_text(messages, book, 3);
+  EXPECT_EQ(s.matching.bursts, 1u);
+  EXPECT_EQ(s.matching.burst_messages, 2u);
+  const replay::MatchCounts& c = at_depth(s, 3);
+  EXPECT_EQ(c.exact_via_synthetic, 1u);
+  EXPECT_EQ(c.length, 0u);
+  EXPECT_EQ(c.agree(), 1u);
+  EXPECT_EQ(c.scored(), 1u);
+}
+
+TEST(MatchingMerge, ASeededLevelThenARealOrderBehindIt) {
+  // The seed is a synthetic ask of 30 at 100; real order 5 (10) joins behind it. The burst takes the
+  // seed with ids 777 (10) and 778 (20), then order 5: data SYN 30, then 5 10 @ 100.
+  const std::string messages = "34200.000000001,1,1,30,100,-1\n"
+                               "34200.000000002,1,5,10,100,-1\n"
+                               "34200.000000003,4,777,10,100,-1\n"
+                               "34200.000000003,4,778,20,100,-1\n"
+                               "34200.000000003,4,5,10,100,-1\n";
+  const std::string book = row3("100,30", "") + row3("100,40", "") + row3("100,30", "") + row3("100,10", "") +
+                           row3("", "");
+  const replay::Summary s = run_text(messages, book, 3);
+  EXPECT_EQ(s.matching.burst_messages, 3u);
+  const replay::MatchCounts& c = at_depth(s, 3);
+  EXPECT_EQ(c.exact_via_synthetic, 1u);
+  EXPECT_EQ(c.exact, 0u);
+  EXPECT_EQ(c.length, 0u);
+}
+
+TEST(MatchingMerge, TwoRealOrdersAtOnePriceAreNeverMerged) {
+  // Seed: a bid of 10 at 90 only. Real asks 5 and 6 (10 each) at 100. Burst: both execute fully.
+  const std::string head = "34200.000000001,1,1,10,90,1\n"
+                           "34200.000000002,1,5,10,100,-1\n"
+                           "34200.000000003,1,6,10,100,-1\n";
+  const std::string rows = row3("", "90,10") + row3("100,10", "90,10") + row3("100,20", "90,10");
+  {
+    const replay::Summary s = run_text(head + "34200.000000004,4,5,10,100,-1\n34200.000000004,4,6,10,100,-1\n",
+                                       rows + row3("100,10", "90,10") + row3("", "90,10"), 3);
+    const replay::MatchCounts& c = at_depth(s, 3);
+    EXPECT_EQ(c.exact, 1u);  // two real fills against two real fills, no synthetic order involved
+    EXPECT_EQ(c.exact_via_synthetic, 0u);
+  }
+  {
+    // 4 from each order: the data holds two fills, the prediction one of 8 against order 5. Merging
+    // real orders would hide this; compared one by one it is a size split at the first fill.
+    const replay::Summary s = run_text(head + "34200.000000004,4,5,4,100,-1\n34200.000000004,4,6,4,100,-1\n",
+                                       rows + row3("100,16", "90,10") + row3("100,12", "90,10"), 3);
+    const replay::MatchCounts& c = at_depth(s, 3);
+    EXPECT_EQ(c.size_split, 1u);
+    EXPECT_EQ(c.exact, 0u);
+    ASSERT_EQ(s.matching.size_split_examples.size(), 1u);
+    EXPECT_EQ(s.matching.size_split_examples[0].data, (std::vector<std::string>{"5 4 @ 100", "6 4 @ 100"}));
+    EXPECT_EQ(s.matching.size_split_examples[0].predicted, (std::vector<std::string>{"5 8 @ 100"}));
+  }
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------- hostile input
