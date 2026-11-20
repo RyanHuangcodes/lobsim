@@ -15,3 +15,35 @@ add_executable(viz_tests viz_test.cpp)
 target_link_libraries(viz_tests PRIVATE viz_core lobsim_options GTest::gtest_main)
 include(GoogleTest)
 gtest_discover_tests(viz_tests)
+
+# ---------------------------------------------------------------------------------------
+# Phase V3 tests.
+# ---------------------------------------------------------------------------------------
+
+# End-to-end: a 5-minute default sim + export, checked for size, hash match and schema validity,
+# plus a stale-fixture guard (fails if web/test/fixtures/meta.json schema_version != the code's).
+# lobsim_run is defined in the top-level CMakeLists; lobsim_viz_export is defined above.
+add_test(NAME viz_export_e2e
+         COMMAND ${CMAKE_COMMAND}
+                 -DRUN=$<TARGET_FILE:lobsim_run>
+                 -DEXPORT=$<TARGET_FILE:lobsim_viz_export>
+                 -DCONFIG=${CMAKE_SOURCE_DIR}/configs/default.json
+                 -DSRC=${CMAKE_SOURCE_DIR}
+                 -DOUT=${CMAKE_CURRENT_BINARY_DIR}/viz_e2e
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/viz_e2e.cmake)
+# The 5-minute sim can take a minute or two; give it headroom.
+set_tests_properties(viz_export_e2e PROPERTIES TIMEOUT 600)
+
+# JS suite (node --test web/test). Skips cleanly when node is absent: find_program resolves node at
+# configure time, the wrapper prints a SKIP marker and exits 0 when it is missing, and ctest treats
+# that marker (via SKIP_REGULAR_EXPRESSION) as a skip rather than a pass or a failure.
+find_program(NODE_EXECUTABLE node)
+add_test(NAME viz_js_tests
+         COMMAND ${CMAKE_COMMAND}
+                 -DNODE=${NODE_EXECUTABLE}
+                 -DSRC=${CMAKE_SOURCE_DIR}
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/run_node_tests.cmake)
+set_tests_properties(viz_js_tests PROPERTIES SKIP_REGULAR_EXPRESSION "viz_js_tests: SKIP")
+if(NOT NODE_EXECUTABLE)
+  message(STATUS "viz: node not found at configure time; viz_js_tests will report SKIPPED")
+endif()
