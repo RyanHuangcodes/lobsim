@@ -135,3 +135,16 @@ One line per decision, with the reason. Section numbers refer to `SPEC.md`.
 - D-137 `sim::OrderLogReader` (order_log.hpp) is the one reader of orders.log: the constructor checks the header, `next()` returns the next request or nullopt at the end. `replay_log` and `parse_order_log` both read through it, so the tool and the fuzz target accept exactly the same inputs. `format_order_log` is the inverse and writes the same bytes as the exchange.
 - D-138 `ReplayError` moved from replay.hpp to order_log.hpp, since the reader throws it; replay.hpp includes order_log.hpp, so existing users compile unchanged.
 - D-139 The check that a request's time is not earlier than the previous one moved from `replay_log` into `OrderLogReader::next()` (same message and line number), so a log that parses is also a log that replays. Parsing allocates nothing sized from a number in the input.
+
+## First 5-minute fuzz run (upgrade 1, F3 acceptance)
+- D-140 First 5-minute run (SPEC upgrade 1, 5.3, exact command, macOS, Homebrew LLVM clang 23, Debug fuzz build, 2026-11-19), started from the 19 committed seeds: no crash, `fuzz-artifacts/` empty. Edge coverage grew from 860 to 1302 and the corpus from 19 inputs to 1487. The rate was measured while three canary runs shared the CPU, so it is a lower bound (a 60 s run alone did about 5,900 exec/s):
+  ```
+  #20	INITED cov: 860 ft: 2305 corp: 19/1048b exec/s: 0 rss: 46Mb
+  #507551	DONE   cov: 1302 ft: 8049 corp: 1487/554Kb lim: 1007 exec/s: 1686 rss: 256Mb
+  Done 507551 runs in 301 second(s)
+  stat::number_of_executed_units: 507551
+  stat::average_exec_per_sec:     1686
+  stat::new_units_added:          3235
+  stat::slowest_unit_time_sec:    0
+  stat::peak_rss_mb:              256
+  ```
