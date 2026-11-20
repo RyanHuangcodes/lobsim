@@ -112,9 +112,13 @@ target_link_libraries(lob PRIVATE lobsim_options)
 add_library(orderlog STATIC src/sim/order_log.cpp src/sim/replay.cpp)
 target_link_libraries(orderlog PUBLIC lob PRIVATE lobsim_options)
 
-# The LOBSTER line parsers and the replayer (upgrade 2): lob only, so the fuzz build compiles them too.
-add_library(replay STATIC src/replay/lobster.cpp src/replay/lobster_book.cpp src/replay/replayer.cpp
-  src/replay/replayer_report.cpp)
+# The LOBSTER line parsers and the replayer (upgrade 2), lob only. The fuzz build compiles the
+# parsers, which the fuzzers use, and not the replayer (D-186).
+add_library(replay STATIC src/replay/lobster.cpp src/replay/lobster_book.cpp)
+if(NOT LOBSIM_FUZZ)
+  target_sources(replay PRIVATE src/replay/replayer.cpp src/replay/replayer_match.cpp
+    src/replay/replayer_json.cpp src/replay/replayer_text.cpp)
+endif()
 target_link_libraries(replay PUBLIC lob PRIVATE lobsim_options)
 
 # Shared differential driver and the crash-file decoder (upgrade 1).

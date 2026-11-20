@@ -1,0 +1,107 @@
+{
+  "mode": "resync",
+  "levels": 3,
+  "compare_depth": 1,
+  "trust_depth": 3,
+  "completed": true,
+  "strict_failure_line": null,
+  "lines": 27,
+  "rows_compared": 27,
+  "counters": {
+    "messages": 27,
+    "type_1": 10,
+    "type_2": 0,
+    "type_3": 0,
+    "type_4": 17,
+    "type_5": 0,
+    "type_6": 0,
+    "type_7": 0,
+    "parse_rejected": 0,
+    "time_truncated": 0,
+    "consumed_by_seed": 1,
+    "seed_orders": 1,
+    "seed_rejected": 0,
+    "submitted": 9,
+    "dup_id": 0,
+    "submit_would_cross": 0,
+    "submit_bad_price": 0,
+    "cancelled": 0,
+    "deleted": 0,
+    "executed": 13,
+    "direction_mismatch": 0,
+    "price_mismatch": 2,
+    "delete_size_mismatch": 0,
+    "oversized_reduce": 0,
+    "seed_attributed": 1,
+    "unknown_id": 1,
+    "hidden_exec": 0,
+    "cross_trade": 0,
+    "halt": 0,
+    "oracle_malformed": 0,
+    "oracle_rejected": 0,
+    "crossed_state": 0
+  },
+  "exact_rows": [
+    {"depth": 1, "exact": 27, "rows": 27, "percent": "100.00"},
+    {"depth": 2, "exact": 27, "rows": 27, "percent": "100.00"},
+    {"depth": 3, "exact": 27, "rows": 27, "percent": "100.00"}
+  ],
+  "divergent_rows": 0,
+  "resync": {
+    "rows": 0,
+    "corrected_by_level": [0, 0, 0],
+    "removed_by_rank": [0, 0, 0],
+    "removed_beyond_level_l": 0,
+    "failed": 0,
+    "skipped_malformed": 0
+  },
+  "matching": {
+    "bursts": 9,
+    "burst_messages": 17,
+    "headline_trust_depth": 3,
+    "by_trust_depth": [
+      {"trust_depth": 1, "exact": 0, "exact_via_synthetic": 0, "queue_order": 0, "price_skip": 0, "price_skip_better": 0, "price_skip_worse": 0, "size_split": 0, "length": 0, "excluded_unknown": 1, "excluded_untrusted": 8, "numerator": 0, "denominator": 0, "percent": "n/a"},
+      {"trust_depth": 3, "exact": 1, "exact_via_synthetic": 1, "queue_order": 1, "price_skip": 2, "price_skip_better": 1, "price_skip_worse": 1, "size_split": 1, "length": 1, "excluded_unknown": 1, "excluded_untrusted": 1, "numerator": 2, "denominator": 7, "percent": "28.57"}
+    ],
+    "examples": {
+      "queue_order": [
+        {"line": 13, "first_difference": 1,
+         "messages": ["line 13: 34200.000000013,4,5,10,2000,-1"],
+         "data": ["5 10 @ 2000"],
+         "predicted": ["2 10 @ 2000"],
+         "before": ["line 8: 34200.000000008,4,1,10,2000,-1", "line 9: 34200.000000008,4,2,5,2000,-1", "line 10: 34200.000000010,4,10,10,1900,1", "line 11: 34200.000000010,4,11,5,1900,1", "line 12: 34200.000000012,1,5,10,2000,-1"],
+         "after": ["line 14: 34200.000000014,4,2,10,2000,-1", "line 15: 34200.000000014,4,3,5,2100,-1", "line 16: 34200.000000016,4,4,5,2200,-1", "line 17: 34200.000000017,4,2,5,2000,-1", "line 18: 34200.000000017,4,4,5,2000,-1"]}
+      ],
+      "price_skip": [
+        {"line": 16, "first_difference": 1, "price_skip": "better",
+         "messages": ["line 16: 34200.000000016,4,4,5,2200,-1"],
+         "data": ["4 5 @ 2200"],
+         "predicted": ["2 5 @ 2000"],
+         "before": ["line 11: 34200.000000010,4,11,5,1900,1", "line 12: 34200.000000012,1,5,10,2000,-1", "line 13: 34200.000000013,4,5,10,2000,-1", "line 14: 34200.000000014,4,2,10,2000,-1", "line 15: 34200.000000014,4,3,5,2100,-1"],
+         "after": ["line 17: 34200.000000017,4,2,5,2000,-1", "line 18: 34200.000000017,4,4,5,2000,-1", "line 19: 34200.000000019,1,6,5,2000,-1", "line 20: 34200.000000020,4,6,5,2000,-1", "line 21: 34200.000000020,4,4,5,2000,-1"]},
+        {"line": 20, "first_difference": 2, "price_skip": "worse",
+         "messages": ["line 20: 34200.000000020,4,6,5,2000,-1", "line 21: 34200.000000020,4,4,5,2000,-1", "line 22: 34200.000000020,4,3,5,2100,-1"],
+         "data": ["6 5 @ 2000", "4 5 @ 2000", "3 5 @ 2100"],
+         "predicted": ["6 5 @ 2000", "3 10 @ 2100"],
+         "before": ["line 15: 34200.000000014,4,3,5,2100,-1", "line 16: 34200.000000016,4,4,5,2200,-1", "line 17: 34200.000000017,4,2,5,2000,-1", "line 18: 34200.000000017,4,4,5,2000,-1", "line 19: 34200.000000019,1,6,5,2000,-1"],
+         "after": ["line 23: 34200.000000023,4,99,5,1900,1", "line 24: 34200.000000024,1,7,5,2000,-1", "line 25: 34200.000000025,4,7,5,2000,-1", "line 26: 34200.000000025,4,3,20,2100,-1", "line 27: 34200.000000025,4,4,5,2200,-1"]}
+      ],
+      "size_split": [
+        {"line": 14, "first_difference": 1,
+         "messages": ["line 14: 34200.000000014,4,2,10,2000,-1", "line 15: 34200.000000014,4,3,5,2100,-1"],
+         "data": ["2 10 @ 2000", "3 5 @ 2100"],
+         "predicted": ["2 15 @ 2000"],
+         "before": ["line 9: 34200.000000008,4,2,5,2000,-1", "line 10: 34200.000000010,4,10,10,1900,1", "line 11: 34200.000000010,4,11,5,1900,1", "line 12: 34200.000000012,1,5,10,2000,-1", "line 13: 34200.000000013,4,5,10,2000,-1"],
+         "after": ["line 16: 34200.000000016,4,4,5,2200,-1", "line 17: 34200.000000017,4,2,5,2000,-1", "line 18: 34200.000000017,4,4,5,2000,-1", "line 19: 34200.000000019,1,6,5,2000,-1", "line 20: 34200.000000020,4,6,5,2000,-1"]}
+      ],
+      "length": [
+        {"line": 17, "first_difference": 2,
+         "messages": ["line 17: 34200.000000017,4,2,5,2000,-1", "line 18: 34200.000000017,4,4,5,2000,-1"],
+         "data": ["2 5 @ 2000", "4 5 @ 2000"],
+         "predicted": ["2 5 @ 2000"],
+         "before": ["line 12: 34200.000000012,1,5,10,2000,-1", "line 13: 34200.000000013,4,5,10,2000,-1", "line 14: 34200.000000014,4,2,10,2000,-1", "line 15: 34200.000000014,4,3,5,2100,-1", "line 16: 34200.000000016,4,4,5,2200,-1"],
+         "after": ["line 19: 34200.000000019,1,6,5,2000,-1", "line 20: 34200.000000020,4,6,5,2000,-1", "line 21: 34200.000000020,4,4,5,2000,-1", "line 22: 34200.000000020,4,3,5,2100,-1", "line 23: 34200.000000023,4,99,5,1900,1"]}
+      ]
+    }
+  }
+}

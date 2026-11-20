@@ -48,5 +48,27 @@
     "removed_beyond_level_l": 0,
     "failed": 0,
     "skipped_malformed": 0
+  },
+  "matching": {
+    "bursts": 3,
+    "burst_messages": 3,
+    "headline_trust_depth": 3,
+    "by_trust_depth": [
+      {"trust_depth": 1, "exact": 0, "exact_via_synthetic": 0, "queue_order": 0, "price_skip": 0, "price_skip_better": 0, "price_skip_worse": 0, "size_split": 0, "length": 0, "excluded_unknown": 0, "excluded_untrusted": 3, "numerator": 0, "denominator": 0, "percent": "n/a"},
+      {"trust_depth": 3, "exact": 0, "exact_via_synthetic": 2, "queue_order": 1, "price_skip": 0, "price_skip_better": 0, "price_skip_worse": 0, "size_split": 0, "length": 0, "excluded_unknown": 0, "excluded_untrusted": 0, "numerator": 2, "denominator": 3, "percent": "66.66"}
+    ],
+    "examples": {
+      "queue_order": [
+        {"line": 11, "first_difference": 1,
+         "messages": ["line 11: 34200.000000011,4,22,30,1000000,1"],
+         "data": ["22 30 @ 1000000"],
+         "predicted": ["SYN@1000000 30 @ 1000000"],
+         "before": ["line 6: 34200.000000006,5,0,25,1000050,1", "line 7: 34200.000000007,3,21,30,1000200,-1", "line 8: 34200.000000008,3,11,50,999900,1", "line 9: 34200.000000009,6,0,500,1000050,-1", "line 10: 34200.000000010,7,0,0,-1,-1"],
+         "after": ["line 12: 34200.000000012,4,778,200,1000000,1", "line 13: 34200.000000013,1,31,10,999800,1", "line 14: 34200.000000014,1,32,70,1000300,-1", "line 15: 34200.000000015,1,33,5,1000200,-1", "line 16: 34200.000000016,1,34,5,1000400,-1"]}
+      ],
+      "price_skip": [],
+      "size_split": [],
+      "length": []
+    }
   }
 }

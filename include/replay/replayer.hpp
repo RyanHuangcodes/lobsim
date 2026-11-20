@@ -36,7 +36,8 @@ std::optional<Mode> parse_mode(std::string_view s);
 struct ReplayOptions {
   Mode mode{Mode::Resync};
   int compare_depth{1};  // strict mode: rows must be exact down to this depth (1..L)
-  int trust_depth{3};    // the matching check: a burst is scored only if the previous row was exact to this depth
+  int trust_depth{3};    // the matching check's headline: a burst is scored only if the previous row was exact
+                         // to this depth (before any correction) and the depth exceeds the burst's prices
   std::size_t max_lookahead{100'000};  // messages buffered ahead of the current one (bursts); more is an error
 };
 
@@ -109,6 +110,78 @@ struct ResyncStats {
 
 inline constexpr std::size_t kMaxDivergences = 1000;
 
+// The matching-agreement check. A burst is a maximal run of consecutive type-4 messages with the
+// same time and the same Direction (any other line ends it), read as one aggressive order. Before
+// the burst is applied, preview_match predicts which resting orders that order would hit, and the
+// prediction is compared with the burst, fill by fill. Each burst gets exactly one class.
+enum class BurstClass : std::uint8_t {
+  Exact,              // the same fills: id, price and size
+  ExactViaSynthetic,  // the same when synthetic orders (SYN@price) are compared by price and size only
+  QueueOrder,         // first difference: same price, a different order
+  PriceSkip,          // first difference: a different price
+  SizeSplit,          // first difference: same order and price, a different size
+  Length,             // every compared fill equal, a different number of fills
+  ExcludedUnknown,    // a message names an id that is neither resting nor attributable to a synthetic order
+  ExcludedUntrusted,  // the previous row was not exact to the trust depth, or the depth is too shallow
+};
+const char* to_string(BurstClass c) noexcept;
+
+// One fill of a burst (data) or of the prediction: an external id, or a synthetic order.
+struct BurstFill {
+  bool synthetic{false};
+  std::int64_t external_id{0};  // unused when synthetic
+  std::int64_t price{0};
+  std::int64_t size{0};
+  bool operator==(const BurstFill&) const = default;
+};
+// "<external id> <size> @ <price>" or "SYN@<price> <size> @ <price>".
+std::string to_string(const BurstFill& f);
+
+struct MatchCounts {
+  int trust_depth{0};
+  std::uint64_t exact{0};
+  std::uint64_t exact_via_synthetic{0};
+  std::uint64_t queue_order{0};
+  std::uint64_t price_skip{0};
+  std::uint64_t price_skip_better{0};  // the predicted fill is at a better price for the taker than the data's
+  std::uint64_t price_skip_worse{0};
+  std::uint64_t size_split{0};
+  std::uint64_t length{0};
+  std::uint64_t excluded_unknown{0};
+  std::uint64_t excluded_untrusted{0};
+  std::uint64_t agree() const { return exact + exact_via_synthetic; }
+  std::uint64_t scored() const {
+    return exact + exact_via_synthetic + queue_order + price_skip + size_split + length;
+  }
+};
+
+// A mismatched burst kept for the report (the first kMaxBurstExamples of each mismatch class at
+// the headline trust depth). Lines are "line N: <message line>".
+struct BurstExample {
+  std::uint64_t line{0};              // the burst's first line
+  std::size_t first_difference{0};    // 1-based index of the first differing fill
+  std::optional<bool> predicted_better;  // price_skip only: the prediction was at a better price
+  std::vector<std::string> messages;  // the burst
+  std::vector<std::string> data;      // the burst as fills
+  std::vector<std::string> predicted; // preview_match's fills
+  std::vector<std::string> before;    // up to 5 lines before the burst
+  std::vector<std::string> after;     // up to 5 lines after it
+};
+
+inline constexpr std::size_t kMaxBurstExamples = 3;
+
+struct MatchingStats {
+  std::uint64_t bursts{0};
+  std::uint64_t burst_messages{0};
+  int headline_trust_depth{3};
+  std::vector<MatchCounts> by_trust_depth;  // trust depths 1, 3, L and the headline, ascending, distinct
+  std::vector<BurstExample> queue_order_examples;
+  std::vector<BurstExample> price_skip_examples;
+  std::vector<BurstExample> size_split_examples;
+  std::vector<BurstExample> length_examples;
+  const MatchCounts& headline() const;
+};
+
 struct Summary {
   Mode mode{Mode::Resync};
   int levels{0};
@@ -121,6 +194,7 @@ struct Summary {
   std::vector<Divergence> divergences;    // the first kMaxDivergences non-exact rows (one entry per differing side)
   Counters counters;
   ResyncStats resync;
+  MatchingStats matching;
   std::optional<StrictFailure> strict_failure;
 };
 
@@ -177,6 +251,9 @@ class Replayer {
   void forget_if_gone(lob::OrderId id);
   void remember(const Entry& e);
   void fail_strict(const Entry& e, int exact_depth);
+  // The matching check of the burst that starts at `first` (already taken from the source); the
+  // rest of the burst is read through the source's lookahead. Changes nothing in the book.
+  void check_burst(const Entry& first, Source& source);
 
   int levels_;
   ReplayOptions options_;
@@ -188,6 +265,7 @@ class Replayer {
   // Depth to which the previous row was exact before any correction (0 if it was not compared):
   // the matching check's trust rule reads it.
   int previous_exact_depth_{0};
+  std::size_t burst_left_{0};  // messages of the current burst still to come after this one
   Summary summary_;
 };
 

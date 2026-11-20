@@ -48,5 +48,20 @@
     "removed_beyond_level_l": 0,
     "failed": 0,
     "skipped_malformed": 0
+  },
+  "matching": {
+    "bursts": 1,
+    "burst_messages": 1,
+    "headline_trust_depth": 3,
+    "by_trust_depth": [
+      {"trust_depth": 1, "exact": 0, "exact_via_synthetic": 0, "queue_order": 0, "price_skip": 0, "price_skip_better": 0, "price_skip_worse": 0, "size_split": 0, "length": 0, "excluded_unknown": 0, "excluded_untrusted": 1, "numerator": 0, "denominator": 0, "percent": "n/a"},
+      {"trust_depth": 3, "exact": 0, "exact_via_synthetic": 0, "queue_order": 0, "price_skip": 0, "price_skip_better": 0, "price_skip_worse": 0, "size_split": 0, "length": 0, "excluded_unknown": 0, "excluded_untrusted": 1, "numerator": 0, "denominator": 0, "percent": "n/a"}
+    ],
+    "examples": {
+      "queue_order": [],
+      "price_skip": [],
+      "size_split": [],
+      "length": []
+    }
   }
 }

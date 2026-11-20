@@ -48,5 +48,34 @@
     "removed_beyond_level_l": 0,
     "failed": 0,
     "skipped_malformed": 0
+  },
+  "matching": {
+    "bursts": 2,
+    "burst_messages": 2,
+    "headline_trust_depth": 3,
+    "by_trust_depth": [
+      {"trust_depth": 1, "exact": 0, "exact_via_synthetic": 0, "queue_order": 0, "price_skip": 0, "price_skip_better": 0, "price_skip_worse": 0, "size_split": 0, "length": 0, "excluded_unknown": 0, "excluded_untrusted": 2, "numerator": 0, "denominator": 0, "percent": "n/a"},
+      {"trust_depth": 3, "exact": 0, "exact_via_synthetic": 0, "queue_order": 0, "price_skip": 1, "price_skip_better": 1, "price_skip_worse": 0, "size_split": 0, "length": 1, "excluded_unknown": 0, "excluded_untrusted": 0, "numerator": 0, "denominator": 2, "percent": "0.00"}
+    ],
+    "examples": {
+      "queue_order": [],
+      "price_skip": [
+        {"line": 6, "first_difference": 1, "price_skip": "better",
+         "messages": ["line 6: 34200.000000006,4,4,45,1000200,-1"],
+         "data": ["4 45 @ 1000200"],
+         "predicted": ["SYN@1000100 45 @ 1000100"],
+         "before": ["line 1: 34200.000000001,1,1,100,1000100,-1", "line 2: 34200.000000002,1,2,50,1000000,1", "line 3: 34200.000000003,1,2,10,999900,1", "line 4: 34200.000000004,1,3,20,1000100,1", "line 5: 34200.000000005,1,4,30,1000200,-1"],
+         "after": ["line 7: 34200.000000007,3,2,60,1000000,1", "line 8: 34200.000000008,1,5,40,999900,1", "line 9: 34200.000000009,1,6,25,999800,1", "line 10: 34200.000000010,4,6,5,999800,-1", "line 11: 34200.000000011,2,5,5,999800,1"]}
+      ],
+      "size_split": [],
+      "length": [
+        {"line": 10, "first_difference": 1,
+         "messages": ["line 10: 34200.000000010,4,6,5,999800,-1"],
+         "data": ["6 5 @ 999800"],
+         "predicted": [],
+         "before": ["line 5: 34200.000000005,1,4,30,1000200,-1", "line 6: 34200.000000006,4,4,45,1000200,-1", "line 7: 34200.000000007,3,2,60,1000000,1", "line 8: 34200.000000008,1,5,40,999900,1", "line 9: 34200.000000009,1,6,25,999800,1"],
+         "after": ["line 11: 34200.000000011,2,5,5,999800,1", "line 12: 34200.000000012,3,54321,7,999700,1", "line 13: 34200.000000013,4,7,0,1000100,-1", "line 14: 34200.0000000140001,5,0,3,1000150,-1"]}
+      ]
+    }
   }
 }

@@ -2,7 +2,9 @@
 # --levels 10 -> lobsim_lobster.
 #   VARIANT=unfiltered: every event is exported; strict mode at compare depth 10 must be exact on
 #     every row at every depth, with no unknown id, no duplicate id, no mismatch of any kind, and
-#     seed attribution only for the references to message 1's order (which the opening seed holds).
+#     seed attribution only for the references to message 1's order (which the opening seed holds);
+#     at trust depth 3 every scored burst of executions must agree with preview_match, with no
+#     mismatch and no unknown id.
 #   VARIANT=filtered: the export keeps only messages inside the top-10 window (--filter-window);
 #     resync mode must make no correction at level 1.
 #   cmake -DRUN=<lobsim_run> -DEXPORT=<lobsim_export_lobster> -DLOBSTER=<lobsim_lobster>
@@ -107,6 +109,34 @@ if(VARIANT STREQUAL "unfiltered")
   expect_counter(seed_attributed ${seed_refs})
   message(STATUS "unfiltered closed loop: ${rows} rows exact at every depth 1-${levels}; "
                  "seed_attributed ${seed_refs} = later references to message 1's order ${id1}")
+
+  # Matching agreement of lobsim against itself at trust depth 3: every scored burst agrees, none
+  # mismatches, none names an unknown id.
+  string(JSON n_depths LENGTH "${summary}" matching by_trust_depth)
+  math(EXPR last_depth "${n_depths} - 1")
+  set(m3 "")
+  foreach(i RANGE 0 ${last_depth})
+    string(JSON t GET "${summary}" matching by_trust_depth ${i} trust_depth)
+    if(t EQUAL 3)
+      string(JSON m3 GET "${summary}" matching by_trust_depth ${i})
+    endif()
+  endforeach()
+  if(m3 STREQUAL "")
+    message(FATAL_ERROR "summary.json has no matching counts for trust depth 3")
+  endif()
+  string(JSON bursts GET "${summary}" matching bursts)
+  string(JSON num GET "${m3}" numerator)
+  string(JSON den GET "${m3}" denominator)
+  foreach(c queue_order price_skip size_split length excluded_unknown)
+    string(JSON v GET "${m3}" ${c})
+    if(NOT v EQUAL 0)
+      message(FATAL_ERROR "matching at trust depth 3: ${c} = ${v}, expected 0 (lobsim against itself)")
+    endif()
+  endforeach()
+  if(den LESS 1 OR NOT num EQUAL den)
+    message(FATAL_ERROR "matching at trust depth 3: agreement ${num}/${den}, expected all of at least one burst")
+  endif()
+  message(STATUS "unfiltered closed loop: matching agreement ${num}/${den} at trust depth 3 (${bursts} bursts)")
 else()
   string(JSON corrected1 GET "${summary}" resync corrected_by_level 0)
   string(JSON removed1 GET "${summary}" resync removed_by_rank 0)

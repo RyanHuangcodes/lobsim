@@ -236,7 +236,7 @@ jobs:
         run: |
           llvm-profdata-18 merge -sparse prof/*.profraw -o lobsim.profdata
           exes=()
-          for name in lob_tests sim_tests fuzz_diff fuzz_regression_tests fuzz_decode_tests lobsim_run lobsim_replay lobsim_bench; do
+          for name in lob_tests sim_tests replay_tests fuzz_diff fuzz_regression_tests fuzz_decode_tests lobsim_run lobsim_replay lobsim_lobster lobsim_export_lobster lobsim_bench; do
             if [ -x "build-cov/$name" ]; then
               exes+=("build-cov/$name")
             else

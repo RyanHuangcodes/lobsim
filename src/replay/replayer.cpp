@@ -108,6 +108,11 @@ Replayer::Replayer(int levels, ReplayOptions options)
   summary_.exact_rows.assign(n, 0);
   summary_.resync.removed.assign(n, 0);
   summary_.resync.corrected.assign(n, 0);
+  std::vector<int> depths{1, 3, levels, options.trust_depth};
+  std::sort(depths.begin(), depths.end());
+  depths.erase(std::unique(depths.begin(), depths.end()), depths.end());
+  summary_.matching.headline_trust_depth = options.trust_depth;
+  for (const int t : depths) summary_.matching.by_trust_depth.push_back(MatchCounts{t});
 }
 
 const Summary& Replayer::run(std::istream& messages, std::istream& orderbook) {
@@ -133,6 +138,9 @@ const Summary& Replayer::run(std::istream& messages, std::istream& orderbook) {
       if (e->msg.ok()) ++c.consumed_by_seed;
       seed(*e->book.value);
     } else if (e->msg.ok()) {
+      // The matching check runs before the first message of a burst is applied (spec 7.1).
+      if (burst_left_ > 0) --burst_left_;
+      else if (e->msg.value->type == 4) check_burst(*e, source);
       apply(*e->msg.value);
     }
     compare(*e);
