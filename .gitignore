@@ -21,3 +21,4 @@ build-replay-canary*/
 
 # real market data (never committed)
 data/
+graphify-out/
