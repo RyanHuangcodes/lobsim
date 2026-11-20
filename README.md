@@ -21,6 +21,7 @@ Same config and seed give byte-identical output files. `SPEC.md` is the original
 - [Design decisions and trade-offs](#design-decisions-and-trade-offs)
 - [Testing](#testing)
 - [How correctness is verified](#how-correctness-is-verified)
+- [Real-data replay (data pending)](#real-data-replay-data-pending)
 - [What is not modelled](#what-is-not-modelled)
 
 ## Build, test and run
@@ -33,7 +34,7 @@ cmake --preset debug    && cmake --build --preset debug -j    && ctest --preset 
 cmake --preset sanitize && cmake --build --preset sanitize -j && ctest --preset sanitize   # ASan + UBSan
 ```
 
-The suite has 409 tests in the debug and release builds and 410 in the sanitize build (one pool test exists only under AddressSanitizer). All three builds compile with `-Wall -Wextra -Wpedantic -Werror` (`LOBSIM_WERROR`, on by default). The libFuzzer targets and the commands to build them (`-DLOBSIM_FUZZ=ON`, LLVM Clang only) are in [FUZZING.md](FUZZING.md). On an Apple M4 the sanitize suite takes about 100 seconds, most of it the differential fuzz test.
+The suite has 504 tests in the debug and release builds and 505 in the sanitize build (one pool test exists only under AddressSanitizer). All three builds compile with `-Wall -Wextra -Wpedantic -Werror` (`LOBSIM_WERROR`, on by default). The libFuzzer targets and the commands to build them (`-DLOBSIM_FUZZ=ON`, LLVM Clang only) are in [FUZZING.md](FUZZING.md). On an Apple M4 the sanitize suite takes about 100 seconds, most of it the differential fuzz test.
 
 Run the default one-hour simulation, check its replay, and draw its plots:
 
@@ -45,6 +46,14 @@ python tools/sweep.py --bin build/release/lobsim_run --config configs/default.js
 ```
 
 `lobsim_run` writes `orders.log`, `trades.csv`, `bbo.csv`, `mm_fills.csv` and `summary.json` and prints a summary. The hash printed by `lobsim_replay` equals `engine_event_hash` in `summary.json`. `tools/sweep.py` runs 89 one-hour simulations (about 30 seconds on an Apple M4) and prints the four multi-seed tables used in this README.
+
+Export a run in LOBSTER format and replay it against its own book with the LOBSTER replayer (the same tool is meant for real LOBSTER files but has not been run on any; see [Real-data replay](#real-data-replay-data-pending)):
+
+```
+./build/release/lobsim_export_lobster --run out/run1 --levels 10 --out out/lobster1       # [--filter-window]
+./build/release/lobsim_lobster --messages out/lobster1/SIM_2012-06-21_34200000_57600000_message_10.csv \
+  --orderbook out/lobster1/SIM_2012-06-21_34200000_57600000_orderbook_10.csv --mode strict --compare-depth 10
+```
 
 ## Architecture
 
@@ -358,6 +367,8 @@ Departures from the specification, each recorded with its evidence:
 | Simulator tests (`sim_tests`) | RNG known answers and unbiasedness, tie-breaking by scheduling order, FIFO channels, the order-log codec, exchange routing, each agent through a scripted context, the market maker's races and inventory bound, every metric on hand-worked scenarios |
 | Determinism | The same seed twice in one process gives byte-identical output files; adding an agent or an observer leaves other agents' decisions unchanged |
 | Replay | The live run's event hash equals the hash of its log replayed through the text, in process and through the command-line tools |
+| LOBSTER replay tests (`replay_tests`) | The two line parsers, and the replayer on hand-written fixtures (every counter, the exact-row rates, the corrections and the matching classes derived by hand and compared exactly) |
+| Closed loop | A 60 s simulator run exported to LOBSTER files and replayed: strict mode must be exact on every row at every depth and every scored burst of executions must agree with `preview_match`; filtered to the top 10 levels, resync mode must make no level-1 correction |
 | Fuzz regression tests | Every committed fuzz seed and every saved crash input runs through the same differential check and the `orders.log` parser check that the libFuzzer targets use |
 | Sanitizers | The whole suite under AddressSanitizer and UndefinedBehaviorSanitizer |
 
@@ -370,11 +381,22 @@ Several tests were strengthened after injected bugs showed they could not see th
 - **Seeded differential test**: 200 seeds of 10,000 random requests, `OrderBook` against the naive `ReferenceBook`, event for event.
 - **Coverage-guided differential fuzzing**: libFuzzer runs the same comparison on inputs it evolves from the committed seeds, and a second fuzzer feeds arbitrary bytes to the `orders.log` parser and checks that it either rejects them cleanly or round-trips them.
 - **Injected-bug canaries**: three deliberate matching bugs (trade at the taker's price, a quantity increase keeping priority, fill-or-kill ignoring self-trade prevention) that CI requires the fuzzer to catch.
+- **Replay canaries**: three deliberate replayer bugs (execution Direction read as the aggressor's side, hidden executions applied, the opening book not seeded) that CI requires the LOBSTER replay to detect.
 - **Sanitizers**: the whole suite and the fuzzers under AddressSanitizer and UndefinedBehaviorSanitizer.
 - **Replay hash**: `orders.log` replays through a fresh engine to the same event hash as the live run.
 - **Coverage**: line coverage of the matching engine (`src/lob`, measured by the CI coverage job): 99.4% (536 lines, 3 not executed: failure branches of `validate()` that a healthy book cannot reach).
 
 All three injected bugs are caught in under 1 s from the seed corpus, and in under 1 s (about 3,000 executions) with no seeds at all. How to run the fuzzers, handle a crash and read the numbers: [FUZZING.md](FUZZING.md).
+
+## Real-data replay (data pending)
+
+`lobsim_lobster` replays a LOBSTER message file into the `OrderBook` and compares the book with the published orderbook file after every message (strict, report and resync modes, with every skipped message and every correction counted), and it checks lobsim's matching rule against each burst of executions in the data. **It has not been run on real Nasdaq data yet**: LOBSTER's free 2012 samples could not be downloaded, so the real-data results in [REAL_DATA.md](REAL_DATA.md) are pending, and it says how to get files and run them.
+
+Three numbers from the **synthetic** closed loop (lobsim's own simulator, seed 7, 60 s, exported to LOBSTER format with 10 levels and replayed; not a market):
+
+- exact rows before any correction (synthetic): 4621 of 4621 (100.00%) at every depth 1 to 10;
+- level-1 corrections in the filtered closed loop at L = 10 (synthetic): 0 in 4,583 rows (23 corrections, all at levels 9 and 10); at smaller L they appear, as [REAL_DATA.md](REAL_DATA.md) explains;
+- matching agreement at trust depth 3 (synthetic): 370 of 370 bursts (100.00%), none excluded. The simulator matches itself, so 100% is the expected result; a real market is not.
 
 ## What is not modelled
 
@@ -384,8 +406,8 @@ All three injected bugs are caught in under 1 s from the seed corpus, and in und
 - No opening or closing auctions.
 - No stop, iceberg or hidden orders.
 - No decrement-and-cancel self-trade prevention.
-- No real market data ingestion.
+- No real market data feeds the simulator. A LOBSTER replayer exists (see above) but has not been run on real data.
 - Agents do not learn or adapt, and the fundamental value is a driftless random walk with constant volatility.
 - Fees enter only the market maker's accounting; no agent decides anything based on them.
 
-Stretch goals: an array-indexed price ladder compared against `std::map`, replay of LOBSTER data, and a reinforcement-learning environment wrapper.
+Stretch goals: an array-indexed price ladder compared against `std::map`, replay of real LOBSTER data (the replayer exists, the data is pending), and a reinforcement-learning environment wrapper.
