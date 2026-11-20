@@ -390,7 +390,7 @@ All three injected bugs are caught in under 1 s from the seed corpus, and in und
 
 ## Real-data replay (data pending)
 
-`lobsim_lobster` replays a LOBSTER message file into the `OrderBook` and compares the book with the published orderbook file after every message (strict, report and resync modes, with every skipped message and every correction counted), and it checks lobsim's matching rule against each burst of executions in the data. **It has not been run on real Nasdaq data yet**: LOBSTER's free 2012 samples could not be downloaded, so the real-data results in [REAL_DATA.md](REAL_DATA.md) are pending, and it says how to get files and run them.
+`lobsim_lobster` replays a LOBSTER message file into the `OrderBook` and compares the book with the published orderbook file after every message (strict, report and resync modes, with every skipped message and every correction counted), and it checks lobsim's matching rule against each burst of executions in the data. **It has not been run on real Nasdaq data yet**: LOBSTER's free 2012 samples could not be downloaded, so the real-data results in [REAL_DATA.md](REAL_DATA.md) are pending, and it says how to get files and run them. Once LOBSTER files are in `data/lobster/`, one command replays every pair in all three modes and writes the results into REAL_DATA.md: `scripts/run_real_data.sh` (without files it writes a "Data not provided yet" note and exits with code 3; `lobsim_lobster` itself exits with code 3 when a given file is missing).
 
 Three numbers from the **synthetic** closed loop (lobsim's own simulator, seed 7, 60 s, exported to LOBSTER format with 10 levels and replayed; not a market):
 

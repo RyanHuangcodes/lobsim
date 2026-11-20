@@ -264,6 +264,14 @@ add_test(NAME lobster_export_fixture
     -DOUT=${CMAKE_CURRENT_BINARY_DIR}/lobster_export_fixture
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/lobster_export_fixture.cmake)
 
+# Missing data (exit code 3) and scripts/run_real_data.sh (upgrade 2b): no data, and one fixture pair.
+add_test(NAME real_data_script
+  COMMAND ${CMAKE_COMMAND}
+    -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_real_data.sh -DLOBSTER=$<TARGET_FILE:lobsim_lobster>
+    -DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/lobster/matching
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/real_data_script
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_real_data.cmake)
+
 # Differential fuzz test (SPEC 4): OrderBook vs ReferenceBook, event for event.
 add_executable(fuzz_diff tests/fuzz_diff.cpp)
 target_include_directories(fuzz_diff PRIVATE tests)

@@ -5,8 +5,9 @@
 //
 // The level count L comes from the orderbook file name (..._orderbook_<L>.csv) and must agree
 // with its column count. With --out, writes summary.json and divergences.csv there. Prints a
-// one-screen summary. Exit codes: 0 done, 1 bad arguments or an input that cannot be replayed,
-// 2 strict mode found a row that is not exact down to --compare-depth.
+// one-screen summary. Exit codes: 0 done, 1 bad arguments or an input that exists but cannot be
+// replayed, 2 strict mode found a row that is not exact down to --compare-depth, 3 a --messages or
+// --orderbook path does not exist (data missing: the message says which files to get and where to put them).
 #include <charconv>
 #include <chrono>
 #include <cstdint>
@@ -15,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <regex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -51,6 +53,48 @@ bool write_file(const std::filesystem::path& path, const std::string& text) {
   return true;
 }
 
+// The names of a LOBSTER pair, derived from whichever of the two paths follows the pattern
+// <TICKER>_<DATE>_<START>_<END>_(message|orderbook)_<L>.csv. Empty when neither does.
+struct ExpectedNames {
+  std::string message, orderbook, readme;
+};
+
+ExpectedNames expected_names(const std::string& messages, const std::string& orderbook) {
+  static const std::regex pattern(R"(^(.+_\d{4}-\d{2}-\d{2}_\d+_\d+)_(message|orderbook)_(\d+)\.csv$)");
+  for (const std::string& path : {orderbook, messages}) {
+    const std::string name = std::filesystem::path(path).filename().string();
+    std::smatch m;
+    if (std::regex_match(name, m, pattern)) {
+      const std::string stem = m[1], levels = m[3];
+      return {stem + "_message_" + levels + ".csv", stem + "_orderbook_" + levels + ".csv", stem + "_README.txt"};
+    }
+  }
+  return {};
+}
+
+// Exit code 3: say which files are missing, where to put them, and how to get them.
+int data_missing(const std::string& messages, const std::string& orderbook) {
+  const ExpectedNames names = expected_names(messages, orderbook);
+  std::fprintf(stderr, "lobsim_lobster: data missing\n");
+  for (const std::string* p : {&messages, &orderbook}) {
+    if (!std::filesystem::exists(*p)) std::fprintf(stderr, "  not found: %s\n", p->c_str());
+  }
+  if (names.message.empty()) {
+    std::fprintf(stderr,
+                 "  expected file names: <TICKER>_<DATE>_<START>_<END>_message_<L>.csv and\n"
+                 "                       <TICKER>_<DATE>_<START>_<END>_orderbook_<L>.csv\n"
+                 "  (e.g. INTC_2012-06-21_34200000_57600000_message_10.csv), plus the sample's README file\n");
+  } else {
+    std::fprintf(stderr, "  expected file names: %s\n                       %s\n                       %s (the sample's README)\n",
+                 names.message.c_str(), names.orderbook.c_str(), names.readme.c_str());
+  }
+  std::fprintf(stderr, "  put them in the folder data/lobster/ and run scripts/run_real_data.sh\n");
+  std::fprintf(stderr,
+               "  LOBSTER data needs a LOBSTER account, a university subscription, an approved trial, or the sample "
+               "that comes with the book Trades, Quotes and Prices (https://lobsterdata.com)\n");
+  return 3;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -83,6 +127,10 @@ int main(int argc, char** argv) {
     }
   }
   if (messages.empty() || orderbook.empty()) return usage("--messages and --orderbook are required");
+
+  if (!std::filesystem::exists(messages) || !std::filesystem::exists(orderbook)) {
+    return data_missing(messages, orderbook);
+  }
 
   replay::Summary summary;
   std::int64_t wall_ns = 0;

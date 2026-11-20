@@ -115,7 +115,12 @@ depth to which the previous row must have been exact for a burst to be scored. W
 writes `summary.json` (counters, exact rows per depth, corrections, matching counts and examples; the
 deterministic part is what the fixture tests compare) and `divergences.csv` (the first 1,000 rows that
 are not exact at depth `L`). It prints a one-screen summary. Exit codes: 0 done, 1 bad arguments or
-input that cannot be replayed, 2 strict failure.
+input that exists but cannot be replayed, 2 strict failure, 3 a given file does not exist (the message names
+the files to get and the folder `data/lobster/`).
+
+Or, with the files in `data/lobster/`, run the whole sequence and write the results into the marked block of
+the next section with one command: `scripts/run_real_data.sh` (options `--data-dir`, `--report`, `--out`,
+`--bin`; exit 3 when the folder holds no pair).
 
 To try the tool without LOBSTER data, export a simulator run in the same format and replay it (the
 closed loop below does exactly this; `--filter-window` imitates LOBSTER's price-range filter):
@@ -129,8 +134,29 @@ build/release/lobsim_lobster --messages out/lobster/SIM_2012-06-21_34200000_5760
 
 ## Real-data results: data not provided yet
 
-**No real data has been replayed. This block holds no numbers on purpose.** When files are available,
-this is what to record here, for at least two tickers, from the three modes above:
+<!-- REAL-DATA:BEGIN -->
+### Data not provided yet
+
+No LOBSTER files were found, so **no real-data results exist**. Nothing is reported here on purpose.
+
+- Expected file names, one pair per ticker and day (L is the number of levels):
+  `<TICKER>_<DATE>_34200000_57600000_message_<L>.csv` and
+  `<TICKER>_<DATE>_34200000_57600000_orderbook_<L>.csv`, for example
+  `INTC_2012-06-21_34200000_57600000_message_10.csv` and
+  `INTC_2012-06-21_34200000_57600000_orderbook_10.csv`.
+- Put them in the folder `data/lobster/` (it is not tracked by git).
+- Run one command, which replays every pair in all three modes and replaces this block with the results:
+
+```
+scripts/run_real_data.sh
+```
+
+LOBSTER data needs a LOBSTER account, a university subscription, an approved trial, or the sample that comes with the book *Trades, Quotes and Prices*.
+<!-- REAL-DATA:END -->
+
+**No real data has been replayed, and the marked block above holds no numbers on purpose.**
+`scripts/run_real_data.sh` replaces it with the results of every pair in `data/lobster/`. The results are
+expected to cover, for at least two tickers, from the three modes above:
 
 - exact-row percentage at depths 1, 2, 5 and L, before any correction;
 - the corrections histogram (by level and by rank) in resync mode;
