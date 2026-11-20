@@ -1,5 +1,11 @@
 #include "replay/replayer.hpp"
 
+// Test-the-tester bugs for the replay canaries (LOBSIM_REPLAY_BUG, upgrade 2): never in a normal build.
+#if (defined(LOBSIM_REPLAY_BUG_DIRECTION_IS_AGGRESSOR) || defined(LOBSIM_REPLAY_BUG_APPLY_HIDDEN) || \
+     defined(LOBSIM_REPLAY_BUG_NO_SEED)) && !defined(LOBSIM_REPLAY_BUG_BUILD)
+#error "LOBSIM_REPLAY_BUG_* injects a replay bug and is only allowed in a LOBSIM_REPLAY_BUG build"
+#endif
+
 #include <algorithm>
 #include <fstream>
 #include <istream>
@@ -136,7 +142,9 @@ const Summary& Replayer::run(std::istream& messages, std::istream& orderbook) {
       }
       if (!e->book.ok()) throw InputError("orderbook line 1 (the opening book): " + e->book.error);
       if (e->msg.ok()) ++c.consumed_by_seed;
+#ifndef LOBSIM_REPLAY_BUG_NO_SEED  // injected bug: the opening book is never seeded
       seed(*e->book.value);
+#endif
     } else if (e->msg.ok()) {
       // The matching check runs before the first message of a burst is applied (spec 7.1).
       if (burst_left_ > 0) --burst_left_;
@@ -172,8 +180,16 @@ void Replayer::seed(const BookRow& row) {
   place(lob::Side::Buy, row.bids);
 }
 
-void Replayer::apply(const LobsterMsg& m) {
+void Replayer::apply(const LobsterMsg& original) {
   Counters& c = summary_.counters;
+#ifdef LOBSIM_REPLAY_BUG_DIRECTION_IS_AGGRESSOR
+  // Injected bug: an execution's Direction is read as the aggressor's side, so the resting side is the other one.
+  LobsterMsg flipped = original;
+  if (flipped.type == 4) flipped.direction = -flipped.direction;
+  const LobsterMsg& m = flipped;
+#else
+  const LobsterMsg& m = original;
+#endif
   switch (m.type) {
     case 1: {
       if (by_external_.count(m.order_id) != 0) {
@@ -192,6 +208,9 @@ void Replayer::apply(const LobsterMsg& m) {
       }
       return;
     }
+#ifdef LOBSIM_REPLAY_BUG_APPLY_HIDDEN
+    case 5:  // injected bug: a hidden execution is applied like an execution
+#endif
     case 2:
     case 3:
     case 4: {
@@ -200,7 +219,9 @@ void Replayer::apply(const LobsterMsg& m) {
       else attribute(m);
       return;
     }
+#ifndef LOBSIM_REPLAY_BUG_APPLY_HIDDEN
     case 5: ++c.hidden_exec; return;
+#endif
     case 6: ++c.cross_trade; return;
     case 7: ++c.halt; return;
     default: return;  // the parser accepts 1..7 only

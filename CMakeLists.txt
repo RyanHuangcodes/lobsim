@@ -54,6 +54,20 @@ if(NOT LOBSIM_INJECT_BUG STREQUAL "")
   add_compile_definitions(${LOBSIM_INJECT_BUG}=1)
 endif()
 
+# One injected replayer bug for the replay canaries (src/replay/replayer.cpp). The build holds only
+# lob, replay and lobsim_lobster (nobody should run the normal suite with a bug compiled in). An
+# unknown name stops here, and so does a combination with the fuzz build or the OrderBook bugs.
+set(LOBSIM_REPLAY_BUG "" CACHE STRING "Replay canary: DIRECTION_IS_AGGRESSOR, APPLY_HIDDEN or NO_SEED")
+if(NOT LOBSIM_REPLAY_BUG STREQUAL "")
+  if(NOT LOBSIM_REPLAY_BUG MATCHES "^(DIRECTION_IS_AGGRESSOR|APPLY_HIDDEN|NO_SEED)$")
+    message(FATAL_ERROR "LOBSIM_REPLAY_BUG='${LOBSIM_REPLAY_BUG}' is not one of DIRECTION_IS_AGGRESSOR, APPLY_HIDDEN, NO_SEED")
+  endif()
+  if(LOBSIM_FUZZ OR NOT LOBSIM_INJECT_BUG STREQUAL "")
+    message(FATAL_ERROR "LOBSIM_REPLAY_BUG cannot be combined with LOBSIM_FUZZ or LOBSIM_INJECT_BUG: one injected bug per build")
+  endif()
+  add_compile_definitions(LOBSIM_REPLAY_BUG_${LOBSIM_REPLAY_BUG}=1 LOBSIM_REPLAY_BUG_BUILD=1)
+endif()
+
 # Warnings apply to our targets only, through this interface target.
 add_library(lobsim_options INTERFACE)
 target_compile_options(lobsim_options INTERFACE -Wall -Wextra -Wpedantic)
@@ -61,7 +75,7 @@ if(LOBSIM_WERROR)
   target_compile_options(lobsim_options INTERFACE -Werror)
 endif()
 
-if(NOT LOBSIM_FUZZ)
+if(NOT LOBSIM_FUZZ AND NOT LOBSIM_REPLAY_BUG)
 include(FetchContent)
 set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
@@ -108,10 +122,6 @@ target_include_directories(lob PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(lob PUBLIC cxx_std_20)
 target_link_libraries(lob PRIVATE lobsim_options)
 
-# The orders.log codec and the replay: they need only lob, so the fuzz build compiles them too.
-add_library(orderlog STATIC src/sim/order_log.cpp src/sim/replay.cpp)
-target_link_libraries(orderlog PUBLIC lob PRIVATE lobsim_options)
-
 # The LOBSTER line parsers and the replayer (upgrade 2), lob only. The fuzz build compiles the
 # parsers, which the fuzzers use, and not the replayer (D-186).
 add_library(replay STATIC src/replay/lobster.cpp src/replay/lobster_book.cpp)
@@ -120,6 +130,31 @@ if(NOT LOBSIM_FUZZ)
     src/replay/replayer_json.cpp src/replay/replayer_text.cpp)
 endif()
 target_link_libraries(replay PUBLIC lob PRIVATE lobsim_options)
+
+# Replay canary build (LOBSIM_REPLAY_BUG): the replayer with one injected bug, and one ctest entry
+# per hand-written fixture that must catch it, i.e. whose strict replay must end with exit code 2.
+if(LOBSIM_REPLAY_BUG)
+  add_executable(lobsim_lobster apps/lobster_main.cpp)
+  target_link_libraries(lobsim_lobster PRIVATE replay lobsim_options)
+  enable_testing()
+  set(_canary_fixtures_DIRECTION_IS_AGGRESSOR basic_types burst matching hidden_exec)
+  set(_canary_fixtures_APPLY_HIDDEN hidden_exec)
+  set(_canary_fixtures_NO_SEED basic_types burst matching hidden_exec)
+  foreach(_fixture IN LISTS _canary_fixtures_${LOBSIM_REPLAY_BUG})
+    add_test(NAME replay_canary_${LOBSIM_REPLAY_BUG}_${_fixture}
+      COMMAND ${CMAKE_COMMAND}
+        -DLOBSTER=$<TARGET_FILE:lobsim_lobster>
+        -DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/lobster/${_fixture}
+        -DLABEL=${LOBSIM_REPLAY_BUG}/${_fixture}
+        -DOUT=${CMAKE_CURRENT_BINARY_DIR}/replay_canary_${_fixture}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/replay_canary_check.cmake)
+  endforeach()
+  return()
+endif()
+
+# The orders.log codec and the replay: they need only lob, so the fuzz build compiles them too.
+add_library(orderlog STATIC src/sim/order_log.cpp src/sim/replay.cpp)
+target_link_libraries(orderlog PUBLIC lob PRIVATE lobsim_options)
 
 # Shared differential driver and the crash-file decoder (upgrade 1).
 add_subdirectory(fuzz)

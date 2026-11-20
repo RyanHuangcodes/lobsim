@@ -89,7 +89,8 @@ TEST_P(LobsterFixture, SummaryMatchesTheHandWrittenExpectation) {
 }
 
 INSTANTIATE_TEST_SUITE_P(Lobster, LobsterFixture,
-                         ::testing::Values("basic_types", "burst", "anomalies", "resync", "strict_failure", "matching"),
+                         ::testing::Values("basic_types", "burst", "anomalies", "resync", "strict_failure", "matching",
+                                           "hidden_exec"),
                          [](const ::testing::TestParamInfo<std::string>& info) { return info.param; });
 
 // Every case directory is listed above, so a new fixture cannot be skipped by accident.
@@ -99,7 +100,8 @@ TEST(LobsterFixtureList, EveryDirectoryIsTested) {
     if (e.is_directory()) dirs.push_back(e.path().filename().string());
   }
   std::sort(dirs.begin(), dirs.end());
-  EXPECT_EQ(dirs, (std::vector<std::string>{"anomalies", "basic_types", "burst", "matching", "resync", "strict_failure"}));
+  EXPECT_EQ(dirs, (std::vector<std::string>{"anomalies", "basic_types", "burst", "hidden_exec", "matching", "resync",
+                                       "strict_failure"}));
 }
 
 TEST(LobsterFixtureStrict, ReportShowsTheLineBothBooksAndTheLastMessages) {

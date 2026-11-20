@@ -210,6 +210,52 @@ jobs:
           path: fuzz-artifacts-unseeded/
           if-no-files-found: ignore
 
+  replay-canary:
+    name: replay-canary (${{ matrix.bug }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        bug:
+          - DIRECTION_IS_AGGRESSOR
+          - APPLY_HIDDEN
+          - NO_SEED
+    steps:
+      - uses: actions/checkout@v7
+      # The closed-loop export comes from a normal build: the canary build holds only lob, replay and
+      # lobsim_lobster. The simulator emits no hidden executions, so APPLY_HIDDEN is checked on the
+      # hand-written fixtures only.
+      - name: Export a closed-loop run (normal build)
+        if: matrix.bug != 'APPLY_HIDDEN'
+        run: |
+          cmake -S . -B build-normal -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14
+          cmake --build build-normal -j "$(nproc)" --target lobsim_run lobsim_export_lobster
+          build-normal/lobsim_run --config configs/default.json --seed 7 --duration-s 60 --out closed-loop/run
+          build-normal/lobsim_export_lobster --run closed-loop/run --levels 10 --out closed-loop/lobster
+      - name: Configure the canary build
+        run: >
+          cmake -S . -B build-replay-canary
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=gcc-14
+          -DCMAKE_CXX_COMPILER=g++-14
+          -DLOBSIM_WERROR=ON
+          -DLOBSIM_REPLAY_BUG=${{ matrix.bug }}
+      - name: Build
+        run: cmake --build build-replay-canary -j "$(nproc)"
+      - name: Fixture replays must fail with exit code 2
+        run: ctest --test-dir build-replay-canary --output-on-failure --no-tests=error -V
+      - name: Closed-loop replay must fail with exit code 2
+        if: matrix.bug != 'APPLY_HIDDEN'
+        run: >
+          cmake -DLOBSTER=build-replay-canary/lobsim_lobster
+          -DMESSAGES=closed-loop/lobster/SIM_2012-06-21_34200000_57600000_message_10.csv
+          -DORDERBOOK=closed-loop/lobster/SIM_2012-06-21_34200000_57600000_orderbook_10.csv
+          -DLABEL=${{ matrix.bug }}/closed-loop
+          -DOUT=closed-loop-replay
+          -P tests/replay_canary_check.cmake
+
   coverage:
     runs-on: ubuntu-24.04
     timeout-minutes: 45

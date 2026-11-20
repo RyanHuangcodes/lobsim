@@ -1,0 +1,67 @@
+{
+  "mode": "report",
+  "levels": 3,
+  "compare_depth": 1,
+  "trust_depth": 3,
+  "completed": true,
+  "strict_failure_line": null,
+  "lines": 5,
+  "rows_compared": 5,
+  "counters": {
+    "messages": 5,
+    "type_1": 2, "type_2": 0, "type_3": 0, "type_4": 1, "type_5": 2, "type_6": 0, "type_7": 0,
+    "parse_rejected": 0,
+    "time_truncated": 0,
+    "consumed_by_seed": 1,
+    "seed_orders": 2,
+    "seed_rejected": 0,
+    "submitted": 1,
+    "dup_id": 0,
+    "submit_would_cross": 0,
+    "submit_bad_price": 0,
+    "cancelled": 0,
+    "deleted": 0,
+    "executed": 0,
+    "direction_mismatch": 0,
+    "price_mismatch": 0,
+    "delete_size_mismatch": 0,
+    "oversized_reduce": 0,
+    "seed_attributed": 1,
+    "unknown_id": 0,
+    "hidden_exec": 2,
+    "cross_trade": 0,
+    "halt": 0,
+    "oracle_malformed": 0,
+    "oracle_rejected": 0,
+    "crossed_state": 0
+  },
+  "exact_rows": [
+    {"depth": 1, "exact": 5, "rows": 5, "percent": "100.00"},
+    {"depth": 2, "exact": 5, "rows": 5, "percent": "100.00"},
+    {"depth": 3, "exact": 5, "rows": 5, "percent": "100.00"}
+  ],
+  "divergent_rows": 0,
+  "resync": {
+    "rows": 0,
+    "corrected_by_level": [0, 0, 0],
+    "removed_by_rank": [0, 0, 0],
+    "removed_beyond_level_l": 0,
+    "failed": 0,
+    "skipped_malformed": 0
+  },
+  "matching": {
+    "bursts": 1,
+    "burst_messages": 1,
+    "headline_trust_depth": 3,
+    "by_trust_depth": [
+      {"trust_depth": 1, "exact": 0, "exact_via_synthetic": 0, "queue_order": 0, "price_skip": 0, "price_skip_better": 0, "price_skip_worse": 0, "size_split": 0, "length": 0, "excluded_unknown": 0, "excluded_untrusted": 1, "numerator": 0, "denominator": 0, "percent": "n/a"},
+      {"trust_depth": 3, "exact": 0, "exact_via_synthetic": 1, "queue_order": 0, "price_skip": 0, "price_skip_better": 0, "price_skip_worse": 0, "size_split": 0, "length": 0, "excluded_unknown": 0, "excluded_untrusted": 0, "numerator": 1, "denominator": 1, "percent": "100.00"}
+    ],
+    "examples": {
+      "queue_order": [],
+      "price_skip": [],
+      "size_split": [],
+      "length": []
+    }
+  }
+}
