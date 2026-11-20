@@ -163,6 +163,14 @@ target_link_libraries(fuzz_regression_tests PRIVATE fuzz_driver lobsim_options G
 target_compile_definitions(fuzz_regression_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME fuzz_regressions_diff COMMAND fuzz_regression_tests --gtest_filter=Diff/*)
 
+# The committed seeds must equal the output of fuzz/make_seeds.py.
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME fuzz_seeds_up_to_date
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/make_seeds.py
+      --check ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/diff)
+endif()
+
 # Decoder unit tests (upgrade 1, 3.1).
 add_executable(fuzz_decode_tests tests/unit/fuzz_decode_test.cpp)
 target_link_libraries(fuzz_decode_tests PRIVATE fuzz_driver lobsim_options GTest::gtest_main)
