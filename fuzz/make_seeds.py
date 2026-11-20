@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Writes the seed corpus for the differential fuzzer, one file per scenario.
 
-    python3 fuzz/make_seeds.py [--out DIR]     write the seeds (default fuzz/corpus/diff)
-    python3 fuzz/make_seeds.py --check DIR     exit 1 if a seed in DIR is missing or differs
+    python3 fuzz/make_seeds.py                 write both corpora (fuzz/corpus/diff, fuzz/corpus/diff_builder)
+    python3 fuzz/make_seeds.py [--out DIR] [--out-builder DIR]
+                                               write only the named corpora
+    python3 fuzz/make_seeds.py [--check DIR] [--check-builder DIR]
+                                               exit 1 if a seed in DIR is missing or differs
 
 Every file is a sequence of 8-byte records in the format of the fuzz driver (fuzz/diff_driver.hpp):
 
@@ -15,6 +18,15 @@ Every file is a sequence of 8-byte records in the format of the fuzz driver (fuz
     b6,b7 t, little-endian uint16: Cancel/Modify target is t if t % 8 == 7 or no id is known,
           else the (t % number of Acks so far)-th Ack id
 
+The diff_builder corpus (fuzz_diff_builder) uses the same records with kind = b0 % 7: 0-2 as above and
+
+    3 insert_passive(side = bit0 of b2, price and qty as above, owner from b1)
+    4 reduce(target as above, qty as above)
+    5 remove(target as above)
+    6 preview_match(taker side = bit0 of b2, limit = the price, qty as above)
+
+The target of 4 and 5 counts every OrderId handed out so far, Acks and insert_passive results alike.
+
 The output depends on nothing but this file: no random module, no clock, no environment.
 """
 import argparse
@@ -23,12 +35,14 @@ import sys
 from pathlib import Path
 
 NEW, CANCEL, MODIFY = 0, 1, 2
+INSERT, REDUCE, REMOVE, PREVIEW = 3, 4, 5, 6  # fuzz_diff_builder only
 BUY, SELL = 0, 1
 GTC, IOC, FOK, MARKET = 0, 1, 2, 3  # bits 3-4 of the flags
 TAKING, RESTING = 0, 1              # STP: CancelTaking, CancelResting
 UNKNOWN_ID_T = 7 + 8 * 100          # t % 8 == 7: used as the id itself; no scenario has 807 orders
 
 DEFAULT_OUT = Path(__file__).resolve().parent / "corpus" / "diff"
+DEFAULT_OUT_BUILDER = Path(__file__).resolve().parent / "corpus" / "diff_builder"
 
 
 def pack(kind, owner, flags, p16, b5, t):
@@ -92,6 +106,33 @@ class Scenario:
 
     def data(self):
         return b"".join(self.records)
+
+
+class BuilderScenario(Scenario):
+    """Adds the builder operations. `acks` counts every OrderId handed out so far: the Nth
+    id belongs to the Nth accepted NewOrder or successful insert_passive."""
+
+    def insert(self, owner, side, price, qty, accepted=True):
+        raw_p, p = price_fields(price, None)
+        raw_q, q = qty_fields(qty)
+        self.records.append(pack(INSERT, owner, side | raw_p | raw_q, p, q, 0))
+        if accepted:
+            self.acks += 1
+        return self.acks
+
+    def reduce(self, wanted, qty):
+        t = UNKNOWN_ID_T if wanted is None else self.target(wanted)
+        raw_q, q = qty_fields(qty)
+        self.records.append(pack(REDUCE, 1, raw_q, 0, q, t))
+
+    def remove(self, wanted):
+        t = UNKNOWN_ID_T if wanted is None else self.target(wanted)
+        self.records.append(pack(REMOVE, 1, 0, 0, 0, t))
+
+    def preview(self, side, limit, qty):
+        raw_p, p = price_fields(limit, None)
+        raw_q, q = qty_fields(qty)
+        self.records.append(pack(PREVIEW, 1, side | raw_p | raw_q, p, q, 0))
 
 
 def worked_example():
@@ -311,6 +352,155 @@ def mixed_stream_64():
         out.append(pack(kind, owner, flags, p16, b5, t))
     return b"".join(out)
 
+def insert_passive_basic():
+    s = BuilderScenario()
+    s.insert(1, BUY, 100, 5)
+    s.insert(2, SELL, 102, 3)
+    s.insert(3, BUY, 99, 4)
+    s.insert(1, SELL, 102, 2)         # joins the queue behind the first sell
+    return s.data()
+
+
+def insert_passive_would_cross():
+    s = BuilderScenario()
+    s.insert(1, SELL, 100, 3)
+    s.insert(2, BUY, 100, 2, accepted=False)   # equal to the best ask: WouldCross
+    s.insert(2, BUY, 104, 2, accepted=False)   # above it
+    s.insert(2, BUY, 99, 2)                    # one tick inside: rests
+    s.insert(3, SELL, 99, 1, accepted=False)   # equal to the best bid
+    s.insert(3, SELL, 98, 1, accepted=False)
+    s.insert(3, BUY, 0, 1, accepted=False)     # InvalidPrice
+    s.insert(3, BUY, 99, 0, accepted=False)    # InvalidQty
+    s.insert(3, BUY, 98, 1)                    # takes the next id: no id was used up above
+    return s.data()
+
+
+def insert_passive_at_tail():
+    s = BuilderScenario()
+    s.new(1, BUY, 100, 5)             # id 1, through the matching path
+    s.insert(2, BUY, 100, 4)          # id 2, behind it
+    s.new(3, BUY, 100, 1)             # id 3
+    s.insert(1, BUY, 100, 2)          # id 4
+    s.new(2, SELL, 100, 6)            # takes id 1 and one lot of id 2
+    s.new(2, SELL, 100, 4)            # then the rest of id 2 and the others in order
+    return s.data()
+
+
+def reduce_partial():
+    s = BuilderScenario()
+    first = s.insert(1, BUY, 100, 5)
+    s.insert(2, BUY, 100, 5)
+    s.reduce(first, 2)                # stays first in the queue with 3 left
+    s.new(3, SELL, 100, 4)            # trades against it first
+    return s.data()
+
+
+def reduce_exact():
+    s = BuilderScenario()
+    a = s.insert(1, SELL, 100, 5)
+    s.insert(2, SELL, 101, 3)
+    s.reduce(a, 5)                    # removes it and its level
+    s.new(3, BUY, 101, 1)
+    return s.data()
+
+
+def reduce_oversized():
+    s = BuilderScenario()
+    a = s.insert(1, BUY, 100, 5)
+    s.insert(2, BUY, 100, 2)
+    s.reduce(a, 9)                    # larger than what rests: Oversized, and it is removed
+    s.new(3, SELL, 100, 1)
+    return s.data()
+
+
+def reduce_unknown():
+    s = BuilderScenario()
+    a = s.insert(1, BUY, 100, 5)
+    s.reduce(None, 1)                 # never existed
+    s.reduce(a, 0)                    # InvalidQty
+    s.reduce(a, -2)                   # InvalidQty (negative)
+    s.reduce(a, 5)                    # removed
+    s.reduce(a, 1)                    # already gone: the decoder still knows the id
+    return s.data()
+
+
+def remove_basic():
+    s = BuilderScenario()
+    a = s.insert(1, BUY, 100, 5)
+    b = s.insert(2, BUY, 100, 3)
+    s.insert(3, SELL, 103, 2)
+    s.remove(a)
+    s.remove(a)                       # UnknownOrder
+    s.remove(None)                    # UnknownOrder
+    s.remove(b)
+    return s.data()
+
+
+def preview_across_levels():
+    s = BuilderScenario()
+    s.insert(1, SELL, 100, 2)
+    s.insert(2, SELL, 100, 3)         # same level, behind the first
+    s.insert(1, SELL, 101, 4)
+    s.insert(3, SELL, 103, 5)
+    s.insert(2, BUY, 98, 3)
+    s.insert(3, BUY, 97, 2)
+    s.preview(BUY, 103, 100)          # walks every ask
+    s.preview(BUY, 101, 100)          # stops at the limit
+    s.preview(BUY, 105, 6)            # stops inside the second level
+    s.preview(SELL, 97, 4)            # walks the bids
+    s.preview(SELL, 99, 4)            # limit above every bid: nothing
+    s.preview(BUY, 103, 0)            # zero qty: nothing
+    return s.data()
+
+
+def builder_mixed():
+    s = BuilderScenario()
+    a = s.insert(1, SELL, 101, 4)
+    s.new(2, BUY, 99, 3)
+    b = s.insert(3, BUY, 100, 5)
+    s.preview(SELL, 99, 6)
+    s.modify(3, b, 100, 2)            # a reduction through the order path: keeps its place
+    s.reduce(a, 1)
+    s.new(1, SELL, 100, 1)            # trades against b
+    s.insert(2, BUY, 101, 2, accepted=False)  # equal to the best ask
+    s.cancel(1, a)
+    s.preview(BUY, 105, 3)
+    s.remove(b)
+    s.new(3, BUY, 102, 2, typ=IOC)
+    return s.data()
+
+
+def mixed_builder_stream_64():
+    """64 records from SplitMix64(2): every kind 0-6, banded values with about one record in eight
+    raw, and targets aimed by a random t."""
+    rng = SplitMix64(2)
+    out = []
+    for _ in range(64):
+        r = rng.next()
+        kind = (r & 0xFF) % 7
+        owner = 1 + (r >> 8) % 3
+        flags = (r >> 16) & 1
+        if kind == NEW:
+            typ = (r >> 12) % 8
+            typ = GTC if typ < 4 else (IOC if typ < 6 else (FOK if typ == 6 else MARKET))
+            flags |= typ << 3
+            flags |= 0x02 if (r >> 17) % 10 == 0 else 0
+            flags |= 0x04 if (r >> 18) & 1 else 0
+            flags |= 0x80 if (r >> 24) % 16 == 0 else 0
+        if (r >> 20) % 8 == 0:
+            flags |= 0x20 | 0x40
+        p16 = (r >> 28) & 0xFFFF
+        if flags & 0x20:
+            p16 = (p16 % 1200) - 100
+        else:
+            p16 = p16 % 11
+        b5 = (r >> 44) & 0xFF
+        if flags & 0x40:
+            b5 = (b5 % 14) - 2 & 0xFF
+        t = (r >> 48) & 0xFFFF
+        out.append(pack(kind, owner, flags, p16, b5, t))
+    return b"".join(out)
+
 
 SCENARIOS = {
     "worked_example": worked_example,
@@ -334,33 +524,69 @@ SCENARIOS = {
     "mixed_stream_64": mixed_stream_64,
 }
 
+BUILDER_SCENARIOS = {
+    "insert_passive_basic": insert_passive_basic,
+    "insert_passive_would_cross": insert_passive_would_cross,
+    "insert_passive_at_tail": insert_passive_at_tail,
+    "reduce_partial": reduce_partial,
+    "reduce_exact": reduce_exact,
+    "reduce_oversized": reduce_oversized,
+    "reduce_unknown": reduce_unknown,
+    "remove_basic": remove_basic,
+    "preview_across_levels": preview_across_levels,
+    "builder_mixed": builder_mixed,
+    "mixed_builder_stream_64": mixed_builder_stream_64,
+}
+
+
+def check(directory, scenarios):
+    bad = 0
+    for name, fn in scenarios.items():
+        path = directory / (name + ".bin")
+        if not path.is_file():
+            print(f"missing seed: {path}", file=sys.stderr)
+            bad += 1
+        elif path.read_bytes() != fn():
+            print(f"seed differs from make_seeds.py output: {path}", file=sys.stderr)
+            bad += 1
+    return bad
+
+
+def write(directory, scenarios):
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, fn in scenarios.items():
+        (directory / (name + ".bin")).write_bytes(fn())
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    group = ap.add_mutually_exclusive_group()
-    group.add_argument("--out", type=Path, default=DEFAULT_OUT, help="directory to write the seeds into")
-    group.add_argument("--check", type=Path, metavar="DIR",
-                       help="compare the seeds with the files in DIR; exit 1 on a missing or different file")
+    ap.add_argument("--out", type=Path, help="write the diff seeds into DIR")
+    ap.add_argument("--out-builder", type=Path, metavar="DIR", help="write the diff_builder seeds into DIR")
+    ap.add_argument("--check", type=Path, metavar="DIR",
+                    help="compare the diff seeds with the files in DIR; exit 1 on a missing or different file")
+    ap.add_argument("--check-builder", type=Path, metavar="DIR", help="the same for the diff_builder seeds")
     args = ap.parse_args()
 
-    seeds = {name + ".bin": fn() for name, fn in SCENARIOS.items()}
-    if args.check:
+    checking = args.check or args.check_builder
+    writing = args.out or args.out_builder
+    if checking and writing:
+        ap.error("--check and --out cannot be combined")
+    if checking:
         bad = 0
-        for fname, data in seeds.items():
-            path = args.check / fname
-            if not path.is_file():
-                print(f"missing seed: {path}", file=sys.stderr)
-                bad += 1
-            elif path.read_bytes() != data:
-                print(f"seed differs from make_seeds.py output: {path}", file=sys.stderr)
-                bad += 1
+        if args.check:
+            bad += check(args.check, SCENARIOS)
+        if args.check_builder:
+            bad += check(args.check_builder, BUILDER_SCENARIOS)
         if bad:
             print("run: python3 fuzz/make_seeds.py", file=sys.stderr)
             return 1
         return 0
-    args.out.mkdir(parents=True, exist_ok=True)
-    for fname, data in seeds.items():
-        (args.out / fname).write_bytes(data)
+    if not writing:
+        args.out, args.out_builder = DEFAULT_OUT, DEFAULT_OUT_BUILDER
+    if args.out:
+        write(args.out, SCENARIOS)
+    if args.out_builder:
+        write(args.out_builder, BUILDER_SCENARIOS)
     return 0
 
 

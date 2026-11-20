@@ -153,7 +153,8 @@ add_executable(lob_tests
   tests/unit/queries_test.cpp
   tests/unit/conservation_test.cpp
   tests/unit/pool_test.cpp
-  tests/unit/order_book_validate_test.cpp)
+  tests/unit/order_book_validate_test.cpp
+  tests/unit/builder_test.cpp)
 target_include_directories(lob_tests PRIVATE tests)
 target_link_libraries(lob_tests PRIVATE lob lobsim_options GTest::gtest_main)
 gtest_discover_tests(lob_tests)
@@ -205,6 +206,7 @@ add_executable(fuzz_regression_tests tests/fuzz_regressions.cpp)
 target_link_libraries(fuzz_regression_tests PRIVATE fuzz_driver lobsim_options GTest::gtest_main)
 target_compile_definitions(fuzz_regression_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME fuzz_regressions_diff COMMAND fuzz_regression_tests --gtest_filter=Diff/*)
+add_test(NAME fuzz_regressions_diff_builder COMMAND fuzz_regression_tests --gtest_filter=DiffBuilder/*)
 add_test(NAME fuzz_regressions_replay_parse COMMAND fuzz_regression_tests --gtest_filter=ReplayParse/*)
 # A gtest filter that matches nothing exits 0; this one fails if the seeds are not found.
 add_test(NAME fuzz_regressions_corpus_found COMMAND fuzz_regression_tests --gtest_filter=FuzzCorpus.*)
@@ -214,7 +216,8 @@ find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
   add_test(NAME fuzz_seeds_up_to_date
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/make_seeds.py
-      --check ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/diff)
+      --check ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/diff
+      --check-builder ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/diff_builder)
 endif()
 
 # Decoder unit tests (upgrade 1, 3.1).

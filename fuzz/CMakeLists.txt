@@ -9,6 +9,10 @@ if(LOBSIM_FUZZ)
   target_link_libraries(fuzz_diff PRIVATE fuzz_driver lobsim_options)
   target_link_options(fuzz_diff PRIVATE -fsanitize=fuzzer,address,undefined)
 
+  add_executable(fuzz_diff_builder fuzz_diff_builder.cpp)
+  target_link_libraries(fuzz_diff_builder PRIVATE fuzz_driver lobsim_options)
+  target_link_options(fuzz_diff_builder PRIVATE -fsanitize=fuzzer,address,undefined)
+
   add_executable(fuzz_replay_parse fuzz_replay_parse.cpp)
   target_link_libraries(fuzz_replay_parse PRIVATE fuzz_driver lobsim_options)
   target_link_options(fuzz_replay_parse PRIVATE -fsanitize=fuzzer,address,undefined)

@@ -3,13 +3,14 @@
 lobsim is fuzzed with libFuzzer, which feeds a program huge numbers of generated inputs and keeps
 the ones that reach new code (coverage-guided), then mutates those to go deeper. A rare path such
 as a fill-or-kill order meeting self-trade prevention during a modify is found far faster this way
-than by blind random generation. This file says what the two fuzzers check, how to build and run
+than by blind random generation. This file says what the three fuzzers check, how to build and run
 them, what to do with a crash, and what CI runs.
 
 ## Contents
 
 - [What the fuzzers check](#what-the-fuzzers-check)
 - [The input format of `fuzz_diff`](#the-input-format-of-fuzz_diff)
+- [The input format of `fuzz_diff_builder`](#the-input-format-of-fuzz_diff_builder)
 - [Building](#building)
 - [Running, replaying, minimizing and merging](#running-replaying-minimizing-and-merging)
 - [When the fuzzer finds a crash](#when-the-fuzzer-finds-a-crash)
@@ -32,6 +33,16 @@ index, the decoded request, both event lists) and calls `std::abort()`, which li
 crash. An exception from either book, for example from the engine's own `validate()` calls in a
 non-`NDEBUG` build, is caught, reported with the name of the book and the message, and aborts too.
 A crash therefore means a bug in one of the two books.
+
+**`fuzz_diff_builder`: differential fuzzing of the book-builder operations.** The same records as
+`fuzz_diff`, with four more kinds: `insert_passive`, `reduce`, `remove` and `preview_match`, the
+operations a feed replayer uses to build a book without matching (`include/lob/order_book.hpp`).
+They run on a fresh `OrderBook` and a fresh `ReferenceBook`. Each operation's return value (the
+`Status`, the new id of an insert, the whole `Fill` list of a preview) and the event buffers must be
+identical; then the same checks as `fuzz_diff` run (`validate()` on both, depth, `resting_orders`,
+`order()` of the target), plus `level_orders(side, price)` of both books, which compares the queue
+order inside the level the operation touched. Any difference aborts with a report that names the
+operation.
 
 **`fuzz_replay_parse`: the `orders.log` parser.** The input is treated as the text of an
 `orders.log`. The real parser (`sim::parse_order_log`) either accepts it or rejects it with
@@ -80,11 +91,30 @@ lots resting at 96. The `lobsim_fuzz_decode` tool prints any input in this reada
 `fuzz_replay_parse` has no structure of its own: the input is the text of an `orders.log` (a header
 line `# lobsim orders.log v1 max_price=<n>`, then one request per line; see `include/sim/order_log.hpp`).
 
+## The input format of `fuzz_diff_builder`
+
+Same 8-byte records and the same decoding of `b1` to `b7` as `fuzz_diff`; only the kind differs.
+`fuzz_diff`'s own format and corpus are not affected.
+
+| `kind = b0 % 7` | Operation |
+|---|---|
+| 0, 1, 2 | New, Cancel, Modify, decoded exactly as in `fuzz_diff` |
+| 3 | `insert_passive(side = bit0 of b2, price, qty, owner)`; the returned id joins `known_ids` |
+| 4 | `reduce(target id, qty)` |
+| 5 | `remove(target id)` |
+| 6 | `preview_match(taker side = bit0 of b2, limit = the price, qty)` |
+
+`known_ids` holds the id of every Ack and of every successful `insert_passive`, in order, so a
+target `t` picks `known_ids[t % known_ids.size()]` unless `t % 8 == 7`. Price and qty follow the
+`raw_price` and `raw_qty` bits of `b2`, so zero, negative and out-of-range values reach the
+validation paths (`InvalidQty`, `InvalidPrice`, `WouldCross`, `Oversized`, `UnknownOrder`).
+`lobsim_fuzz_decode --builder <file>` prints such an input, with each operation's result.
+
 ## Building
 
 The fuzz targets need Clang with libFuzzer (GCC does not support `-fsanitize=fuzzer`). They are built
 in a build directory of their own, `build-fuzz/`, which configures only the `lob` and `orderlog`
-libraries, the drivers and the two fuzz executables: no tests, apps or benchmarks, so no instrumented
+libraries, the drivers and the three fuzz executables: no tests, apps or benchmarks, so no instrumented
 object is ever linked into a non-fuzzer executable. `LOBSIM_FUZZ` cannot be combined with
 `LOBSIM_SANITIZE` (a fuzz build already includes ASan and UBSan), and CMake stops with a message if the
 compiler is not LLVM Clang.
@@ -108,10 +138,11 @@ cmake -S . -B build-fuzz -DLOBSIM_FUZZ=ON \
 cmake --build build-fuzz -j
 ```
 
-Plain Homebrew `clang++` linked both fuzzers without errors: no `lld` and no libc++ library-path flag
+Plain Homebrew `clang++` linked the fuzzers without errors: no `lld` and no libc++ library-path flag
 were needed (D-131).
 
-The executables are `build-fuzz/fuzz/fuzz_diff` and `build-fuzz/fuzz/fuzz_replay_parse`. The fuzz
+The executables are `build-fuzz/fuzz/fuzz_diff`, `build-fuzz/fuzz/fuzz_diff_builder` and
+`build-fuzz/fuzz/fuzz_replay_parse`. The fuzz
 build defaults to Debug, so `NDEBUG` is off and the engine's own `validate()` calls run on every
 request. `lobsim_fuzz_decode` is built by the normal build (for example `build/debug/fuzz/lobsim_fuzz_decode`).
 
@@ -121,8 +152,11 @@ libFuzzer writes new inputs to the first corpus directory, so fuzz into a scratc
 the committed seeds as the second one:
 
 ```sh
-mkdir -p fuzz-work/diff fuzz-work/replay_parse fuzz-artifacts
+mkdir -p fuzz-work/diff fuzz-work/diff_builder fuzz-work/replay_parse fuzz-artifacts
 ./build-fuzz/fuzz/fuzz_diff fuzz-work/diff fuzz/corpus/diff \
+  -max_len=4096 -max_total_time=300 -timeout=10 \
+  -artifact_prefix=fuzz-artifacts/ -print_final_stats=1
+./build-fuzz/fuzz/fuzz_diff_builder fuzz-work/diff_builder fuzz/corpus/diff_builder \
   -max_len=4096 -max_total_time=300 -timeout=10 \
   -artifact_prefix=fuzz-artifacts/ -print_final_stats=1
 ./build-fuzz/fuzz/fuzz_replay_parse fuzz-work/replay_parse fuzz/corpus/replay_parse \
@@ -137,6 +171,7 @@ Replay one crash without fuzzing (the binary takes a file as its argument):
 
 ```sh
 ./build-fuzz/fuzz/fuzz_diff fuzz-artifacts/crash-<sha1>
+./build-fuzz/fuzz/fuzz_diff_builder fuzz-artifacts/crash-<sha1>
 ./build-fuzz/fuzz/fuzz_replay_parse fuzz-artifacts/crash-<sha1>
 ```
 
@@ -163,37 +198,39 @@ skip the `make_seeds.py` step there, since those seeds are not generated by a sc
 ## When the fuzzer finds a crash
 
 1. Read it. `lobsim_fuzz_decode <file>` from a normal build prints each request and the reference
-   book's events, then runs the differential check and prints the mismatch report, or `books agree`
+   book's events (`--builder` for a `fuzz_diff_builder` input), then runs the differential check and prints the mismatch report, or `books agree`
    if the two books agree in that build (an injected-bug canary crash decodes this way: the bug
    exists only in the canary binary). `fuzz_replay_parse` crashes are plain text: open the file.
 2. Shrink it with `-minimize_crash=1` as above.
 3. Decide which side is wrong using the rules of `SPEC.md` (not by assuming the fast book is the one
    to change), and fix it. Nothing may be loosened to make a check pass.
-4. Copy the minimized file to `fuzz/regressions/diff/<short-description>.bin` (or
+4. Copy the minimized file to `fuzz/regressions/diff/<short-description>.bin` (`fuzz/regressions/diff_builder/` for
+   `fuzz_diff_builder`; or
    `fuzz/regressions/replay_parse/<short-description>.log`).
 5. Add a normal hand-written unit test for the same scenario.
 6. Commit with a message that names the bug.
 
 ## Seeds and the regression test
 
-The seed corpus `fuzz/corpus/diff/` is generated by `fuzz/make_seeds.py` (Python 3, standard library
+The seed corpora `fuzz/corpus/diff/` and `fuzz/corpus/diff_builder/` (11 named scenarios for the
+builder operations, ending in a 64-record mixed stream) are generated by `fuzz/make_seeds.py` (Python 3, standard library
 only, deterministic): one file per scenario of the original unit tests plus a 64-request mixed stream,
 named after the scenario (`fok_one_lot_short.bin`, `stp_cancel_resting.bin`, ...). Regenerate with
 `python3 fuzz/make_seeds.py`. The ctest test `fuzz_seeds_up_to_date` runs
-`make_seeds.py --check fuzz/corpus/diff` and fails if a generated seed is missing or differs; extra
+`make_seeds.py --check fuzz/corpus/diff --check-builder fuzz/corpus/diff_builder` and fails if a generated seed is missing or differs; extra
 files (hash-named inputs from a merge) are ignored. `fuzz/corpus/README.md` also records how the
 `replay_parse` seeds were made.
 
 `fuzz_regression_tests` runs every regular file of `fuzz/regressions/<target>/` and then of
 `fuzz/corpus/<target>/` through the same driver function the fuzzer uses (`run_diff`,
-`run_replay_parse`), one test case per file, in any compiler and with no libFuzzer. The files are listed
+`run_diff_builder`, `run_replay_parse`), one test case per file, in any compiler and with no libFuzzer. The files are listed
 when the test runs, so a new file needs neither a rebuild nor a reconfigure; for that reason the
-tests are registered with plain `add_test` (`fuzz_regressions_diff`, `fuzz_regressions_replay_parse`)
+tests are registered with plain `add_test` (`fuzz_regressions_diff`, `fuzz_regressions_diff_builder`, `fuzz_regressions_replay_parse`)
 and not with `gtest_discover_tests`, whose list is fixed at build time and would silently skip a new
 file. A failing file aborts the process; the file's path is printed first, so ctest's output names
 it. Empty directories (a `.gitkeep` only) pass. Because a gtest filter that matches nothing also
-exits 0, a third ctest entry, `fuzz_regressions_corpus_found`, fails unless the 19 named seeds of
-`fuzz/corpus/diff` and the 4 seeds of `fuzz/corpus/replay_parse` are found.
+exits 0, a further ctest entry, `fuzz_regressions_corpus_found`, fails unless the 19 named seeds of
+`fuzz/corpus/diff`, the 11 of `fuzz/corpus/diff_builder` and the 4 seeds of `fuzz/corpus/replay_parse` are found.
 
 ## What CI runs
 
@@ -204,7 +241,7 @@ exits 0, a third ctest entry, `fuzz_regressions_corpus_found`, fails unless the 
 - `sanitize`: Clang 18 with `-DLOBSIM_SANITIZE=ON` and `ctest`.
 - `fuzz-smoke`: the fuzz build with Clang 18, a check that `liblob.a` and `liborderlog.a` contain
   `__sanitizer_cov` symbols (an engine without instrumentation would give the fuzzer no feedback),
-  then `fuzz_diff` and `fuzz_replay_parse` for 60 seconds each against the committed corpora. Crash
+  then `fuzz_diff`, `fuzz_diff_builder` and `fuzz_replay_parse` for 60 seconds each against the committed corpora. Crash
   files are uploaded on failure.
 - `fuzz-canary`: one job per injected bug (below), with the same instrumentation check. The fuzzer
   runs for up to 300 seconds from the committed corpus, and then for up to 120 seconds from an empty
@@ -240,11 +277,12 @@ Merging a nightly corpus into the repository is a manual step:
 ## Measured runs
 
 Five-minute runs with the exact commands above, started from the committed seeds, on macOS with
-Homebrew LLVM clang, Debug fuzz build. Neither found a crash.
+Homebrew LLVM clang, Debug fuzz build. None found a crash.
 
 | target | execs | exec/s | coverage (edges) | corpus |
 |---|---|---|---|---|
 | `fuzz_diff` (D-140) | 507,551 in 301 s | 1,686 (measured while other fuzz runs shared the CPU; a 60 s run alone did about 5,900) | 860 to 1302 | 19 to 1487 inputs |
+| `fuzz_diff_builder` (D-157) | 505,298 in 301 s | 1,678 | 1237 to 2042 | 11 to 2009 inputs |
 | `fuzz_replay_parse` (D-144) | 10,367,465 in 301 s | 34,443 | 313 to 493 | 3 to 199 inputs |
 
 ## Injected-bug canaries

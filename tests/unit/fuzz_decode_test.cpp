@@ -229,4 +229,66 @@ TEST(FuzzDecode, ToString) {
   EXPECT_EQ(fuzz::to_string(Modify{2, 1, 97, 4}), "Modify owner=2 id=1 price=97 qty=4");
 }
 
+using fuzz::BuilderOp;
+using fuzz::InsertPassive;
+using fuzz::PreviewMatch;
+using fuzz::Reduce;
+using fuzz::Remove;
+
+BuilderOp dec_b(const Rec& r, const std::vector<OrderId>& known = {}, std::uint64_t index = 0) {
+  return fuzz::decode_builder_record(r.data(), index, known);
+}
+
+TEST(FuzzDecodeBuilder, KindIsB0Mod7AndKinds0To2MatchTheOriginalFormat) {
+  EXPECT_TRUE(std::holds_alternative<NewOrder>(dec_b(rec(7, 0, 0, 0, 0, 0))));
+  EXPECT_TRUE(std::holds_alternative<Cancel>(dec_b(rec(8, 0, 0, 0, 0, 0))));
+  EXPECT_TRUE(std::holds_alternative<Modify>(dec_b(rec(9, 0, 0, 0, 0, 0))));
+  EXPECT_TRUE(std::holds_alternative<InsertPassive>(dec_b(rec(3, 0, 0, 0, 0, 0))));
+  EXPECT_TRUE(std::holds_alternative<Reduce>(dec_b(rec(4, 0, 0, 0, 0, 0))));
+  EXPECT_TRUE(std::holds_alternative<Remove>(dec_b(rec(5, 0, 0, 0, 0, 0))));
+  EXPECT_TRUE(std::holds_alternative<PreviewMatch>(dec_b(rec(6, 0, 0, 0, 0, 0))));
+  EXPECT_TRUE(std::holds_alternative<PreviewMatch>(dec_b(rec(13, 0, 0, 0, 0, 0))));  // 13 % 7 == 6
+
+  const std::vector<OrderId> known = {4, 9};
+  for (unsigned kind = 0; kind < 3; ++kind) {
+    const Rec r = rec(static_cast<std::uint8_t>(kind), 2, 0x69, 0x34, 0x12, 0x83, 0x01, 0x00);
+    const BuilderOp b = dec_b(r, known, 5);
+    const Request q = dec(r, known, 5);
+    std::visit([&](const auto& x) { EXPECT_EQ(b, BuilderOp{x}); }, q);
+  }
+}
+
+TEST(FuzzDecodeBuilder, BuilderOperationsUseTheSharedFieldRules) {
+  const std::vector<OrderId> known = {4, 9};
+  // Sell, band price 95 + 3, band qty 1 + 4, owner 3; t = 1 -> known[1].
+  EXPECT_EQ(dec_b(rec(3, 2, 0x01, 3, 0, 4, 1, 0), known), (BuilderOp{InsertPassive{Side::Sell, 98, 5, 3}}));
+  // raw qty -3 (0xFD), target t = 0 -> known[0]
+  EXPECT_EQ(dec_b(rec(4, 0, 0x40, 0, 0, 0xFD, 0, 0), known), (BuilderOp{Reduce{4, -3}}));
+  EXPECT_EQ(dec_b(rec(5, 0, 0, 0, 0, 0, 1, 0), known), (BuilderOp{Remove{9}}));
+  EXPECT_EQ(dec_b(rec(5, 0, 0, 0, 0, 0, 7, 0), known), (BuilderOp{Remove{7}}));  // t % 8 == 7 is the raw id
+  // raw price 0x0140 = 320, Buy taker, qty 10
+  EXPECT_EQ(dec_b(rec(6, 0, 0x20, 0x40, 0x01, 9, 0, 0), known), (BuilderOp{PreviewMatch{Side::Buy, 320, 10}}));
+}
+
+TEST(FuzzDecodeBuilder, ToStringAndDecodeBuilderOutcomes) {
+  EXPECT_EQ(fuzz::op_to_string(InsertPassive{Side::Sell, 98, 5, 3}),
+            "InsertPassive owner=3 side=Sell price=98 qty=5");
+  EXPECT_EQ(fuzz::op_to_string(Reduce{4, 2}), "Reduce id=4 qty=2");
+  EXPECT_EQ(fuzz::op_to_string(Remove{4}), "Remove id=4");
+  EXPECT_EQ(fuzz::op_to_string(PreviewMatch{Side::Buy, 101, 7}), "PreviewMatch side=Buy limit=101 qty=7");
+  EXPECT_EQ(fuzz::op_to_string(Cancel{2, 5}), "Cancel owner=2 id=5");
+
+  // insert_passive(Buy 96 x 6), then a Remove aimed at it (t = 0 -> known[0] = 1).
+  const std::vector<std::uint8_t> bytes = {3, 0, 0, 0x64, 0, 5, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0};
+  std::vector<std::vector<std::string>> outcomes;
+  const std::vector<BuilderOp> ops = fuzz::decode_builder(bytes.data(), bytes.size(), &outcomes);
+  ASSERT_EQ(ops.size(), 2u);
+  EXPECT_EQ(ops[0], (BuilderOp{InsertPassive{Side::Buy, 96, 6, 1}}));
+  EXPECT_EQ(ops[1], (BuilderOp{Remove{1}}));
+  ASSERT_EQ(outcomes.size(), 2u);
+  EXPECT_EQ(outcomes[0], (std::vector<std::string>{"-> status=Ok id=1 fills=[]"}));
+  EXPECT_EQ(outcomes[1], (std::vector<std::string>{"-> status=Ok id=0 fills=[]"}));
+  fuzz::run_diff_builder(bytes.data(), bytes.size());
+}
+
 }  // namespace

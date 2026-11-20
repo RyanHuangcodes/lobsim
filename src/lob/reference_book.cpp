@@ -215,6 +215,66 @@ void ReferenceBook::do_modify(const Modify& req, EventBuffer& out) {
   rest(t, old.post_only);
 }
 
+// ---------------------------------------------------------------- book builder
+
+Result<OrderId> ReferenceBook::insert_passive(Side side, Price price, Qty qty, OwnerId owner) {
+  if (qty <= 0) return {Status::InvalidQty, 0};
+  if (!price_in_range(price)) return {Status::InvalidPrice, 0};
+  if (would_cross(side, price)) return {Status::WouldCross, 0};
+  const OrderId id = next_order_id_++;
+  rest(Taker{id, owner, side, false, price, qty, STP::CancelTaking}, false);
+#ifndef NDEBUG
+  validate();
+#endif
+  return {Status::Ok, id};
+}
+
+Status ReferenceBook::reduce(OrderId id, Qty qty) {
+  if (qty <= 0) return Status::InvalidQty;
+  const std::size_t i = find_order(id);
+  if (i == orders_.size()) return Status::UnknownOrder;
+  Status status = Status::Ok;
+  if (qty >= orders_[i].remaining) {
+    if (qty > orders_[i].remaining) status = Status::Oversized;  // D-152: it is removed all the same
+    orders_.erase(orders_.begin() + static_cast<std::ptrdiff_t>(i));
+  } else {
+    orders_[i].remaining -= qty;
+  }
+#ifndef NDEBUG
+  validate();
+#endif
+  return status;
+}
+
+Status ReferenceBook::remove(OrderId id) {
+  const std::size_t i = find_order(id);
+  if (i == orders_.size()) return Status::UnknownOrder;
+  orders_.erase(orders_.begin() + static_cast<std::ptrdiff_t>(i));
+#ifndef NDEBUG
+  validate();
+#endif
+  return Status::Ok;
+}
+
+std::vector<Fill> ReferenceBook::preview_match(Side taker_side, Price limit, Qty qty) const {
+  std::vector<Fill> fills;
+  if (qty <= 0) return fills;
+  std::vector<Resting> makers;
+  for (const Resting& o : orders_)
+    if (o.side == opposite(taker_side)) makers.push_back(o);
+  std::sort(makers.begin(), makers.end(),
+            [this](const Resting& a, const Resting& b) { return has_priority_over(a, b); });
+  Qty left = qty;
+  for (const Resting& m : makers) {
+    if (left <= 0) break;
+    if (taker_side == Side::Buy ? m.price > limit : m.price < limit) break;
+    const Qty take = std::min(left, m.remaining);
+    fills.push_back(Fill{m.id, m.price, take});
+    left -= take;
+  }
+  return fills;
+}
+
 // ---------------------------------------------------------------- queries
 
 std::optional<Price> ReferenceBook::best_bid() const {
@@ -262,6 +322,19 @@ std::optional<OrderView> ReferenceBook::order(OrderId id) const {
   if (i == orders_.size()) return std::nullopt;
   const Resting& o = orders_[i];
   return OrderView{o.id, o.owner, o.side, o.price, o.remaining, o.stp, o.post_only};
+}
+
+std::vector<OrderView> ReferenceBook::level_orders(Side side, Price price) const {
+  std::vector<Resting> mine;
+  for (const Resting& o : orders_)
+    if (o.side == side && o.price == price) mine.push_back(o);
+  std::sort(mine.begin(), mine.end(),
+            [](const Resting& a, const Resting& b) { return a.priority_seq < b.priority_seq; });
+  std::vector<OrderView> views;
+  views.reserve(mine.size());
+  for (const Resting& o : mine)
+    views.push_back(OrderView{o.id, o.owner, o.side, o.price, o.remaining, o.stp, o.post_only});
+  return views;
 }
 
 std::size_t ReferenceBook::resting_orders() const { return orders_.size(); }

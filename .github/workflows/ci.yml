@@ -93,6 +93,12 @@ jobs:
           ./build-fuzz/fuzz/fuzz_diff fuzz-work/diff fuzz/corpus/diff \
             -max_len=4096 -max_total_time=60 -timeout=10 \
             -artifact_prefix=fuzz-artifacts/ -print_final_stats=1
+      - name: Fuzz book-builder operations (60 s)
+        run: |
+          mkdir -p fuzz-work/diff_builder fuzz-artifacts
+          ./build-fuzz/fuzz/fuzz_diff_builder fuzz-work/diff_builder fuzz/corpus/diff_builder \
+            -max_len=4096 -max_total_time=60 -timeout=10 \
+            -artifact_prefix=fuzz-artifacts/ -print_final_stats=1
       - name: Fuzz replay parser (60 s)
         run: |
           mkdir -p fuzz-work/replay_parse fuzz-artifacts

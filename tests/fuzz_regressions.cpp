@@ -92,6 +92,13 @@ TEST(FuzzCorpus, CommittedSeedsAreFound) {
         "every_reject_reason", "mixed_stream_64"}) {
     EXPECT_TRUE(has_file(diff, std::string(name) + ".bin")) << "missing diff seed " << name << ".bin";
   }
+  const std::vector<Case> builder = collect_cases("diff_builder");
+  for (const char* name :
+       {"insert_passive_basic", "insert_passive_would_cross", "insert_passive_at_tail", "reduce_partial",
+        "reduce_exact", "reduce_oversized", "reduce_unknown", "remove_basic", "preview_across_levels",
+        "builder_mixed", "mixed_builder_stream_64"}) {
+    EXPECT_TRUE(has_file(builder, std::string(name) + ".bin")) << "missing diff_builder seed " << name << ".bin";
+  }
   const std::vector<Case> replay = collect_cases("replay_parse");
   for (const char* name : {"empty.log", "run_seed1.log", "run_seed2.log", "run_seed3.log"}) {
     EXPECT_TRUE(has_file(replay, name)) << "missing replay_parse seed " << name;
@@ -112,6 +119,21 @@ TEST_P(DiffRegression, BooksAgree) {
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(DiffRegression);
 
 INSTANTIATE_TEST_SUITE_P(Diff, DiffRegression, ::testing::ValuesIn(collect_cases("diff")),
+                         [](const ::testing::TestParamInfo<Case>& info) { return info.param.name; });
+
+class DiffBuilderRegression : public ::testing::TestWithParam<Case> {};
+
+TEST_P(DiffBuilderRegression, BooksAgree) {
+  const Case& c = GetParam();
+  std::fprintf(stderr, "run_diff_builder: %s\n", c.path.c_str());
+  std::fflush(stderr);
+  const std::vector<std::uint8_t> bytes = read_bytes(c.path);
+  lob::fuzz::run_diff_builder(bytes.data(), bytes.size());
+}
+
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(DiffBuilderRegression);
+
+INSTANTIATE_TEST_SUITE_P(DiffBuilder, DiffBuilderRegression, ::testing::ValuesIn(collect_cases("diff_builder")),
                          [](const ::testing::TestParamInfo<Case>& info) { return info.param.name; });
 
 class ReplayParseRegression : public ::testing::TestWithParam<Case> {};

@@ -297,6 +297,71 @@ void OrderBook::do_modify(const Modify& req, EventBuffer& out) {
   rest(t, post_only);
 }
 
+// ---------------------------------------------------------------- book builder
+
+Result<OrderId> OrderBook::insert_passive(Side side, Price price, Qty qty, OwnerId owner) {
+  if (qty <= 0) return {Status::InvalidQty, 0};
+  if (!price_in_range(price)) return {Status::InvalidPrice, 0};
+  if (would_cross(side, price)) return {Status::WouldCross, 0};
+  const OrderId id = next_order_id_++;
+  rest(Taker{id, owner, side, false, price, qty, STP::CancelTaking}, false);
+#ifndef NDEBUG
+  validate();
+#endif
+  return {Status::Ok, id};
+}
+
+Status OrderBook::reduce(OrderId id, Qty qty) {
+  if (qty <= 0) return Status::InvalidQty;
+  Order* o = find(id);
+  if (o == nullptr) return Status::UnknownOrder;
+  Status status = Status::Ok;
+  if (qty >= o->remaining) {
+    if (qty > o->remaining) status = Status::Oversized;  // D-152: it is removed all the same
+    remove_resting(o);
+  } else {
+    o->level->total_qty -= qty;
+    o->remaining -= qty;
+  }
+#ifndef NDEBUG
+  validate();
+#endif
+  return status;
+}
+
+Status OrderBook::remove(OrderId id) {
+  Order* o = find(id);
+  if (o == nullptr) return Status::UnknownOrder;
+  remove_resting(o);
+#ifndef NDEBUG
+  validate();
+#endif
+  return Status::Ok;
+}
+
+template <class Makers>
+void OrderBook::preview_in(const Makers& makers, Side taker_side, Price limit, Qty qty,
+                           std::vector<Fill>& fills) const {
+  Qty left = qty;
+  for (const auto& [price, level] : makers) {
+    if (left <= 0) break;
+    if (taker_side == Side::Buy ? price > limit : price < limit) break;
+    for (const Order* m = level.head; m != nullptr && left > 0; m = m->next) {
+      const Qty take = std::min(left, m->remaining);
+      fills.push_back(Fill{m->id, price, take});
+      left -= take;
+    }
+  }
+}
+
+std::vector<Fill> OrderBook::preview_match(Side taker_side, Price limit, Qty qty) const {
+  std::vector<Fill> fills;
+  if (qty <= 0) return fills;
+  if (taker_side == Side::Buy) preview_in(asks_, taker_side, limit, qty, fills);
+  else preview_in(bids_, taker_side, limit, qty, fills);
+  return fills;
+}
+
 // ---------------------------------------------------------------- queries
 
 std::optional<Price> OrderBook::best_bid() const {
@@ -334,6 +399,19 @@ std::optional<OrderView> OrderBook::order(OrderId id) const {
   const Order* o = find(id);
   if (o == nullptr) return std::nullopt;
   return OrderView{o->id, o->owner, o->side, o->price, o->remaining, o->stp, o->post_only};
+}
+
+std::vector<OrderView> OrderBook::level_orders(Side side, Price price) const {
+  std::vector<OrderView> orders;
+  auto collect = [&](const auto& book_side) {
+    const auto it = book_side.find(price);
+    if (it == book_side.end()) return;
+    for (const Order* o = it->second.head; o != nullptr; o = o->next)
+      orders.push_back(OrderView{o->id, o->owner, o->side, o->price, o->remaining, o->stp, o->post_only});
+  };
+  if (side == Side::Buy) collect(bids_);
+  else collect(asks_);
+  return orders;
 }
 
 std::size_t OrderBook::resting_orders() const { return indexed_; }

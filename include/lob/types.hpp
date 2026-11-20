@@ -44,6 +44,25 @@ struct Modify {
 
 using Request = std::variant<NewOrder, Cancel, Modify>;
 
+// Outcome of the book-builder operations (insert_passive, reduce, remove, D-151).
+enum class Status : std::uint8_t { Ok, WouldCross, UnknownOrder, Oversized, InvalidQty, InvalidPrice };
+
+template <class T>
+struct Result {
+  Status status{Status::Ok};
+  T value{};
+  bool ok() const { return status == Status::Ok; }
+  bool operator==(const Result&) const = default;
+};
+
+// One maker touched by preview_match: the resting order, the book's price and the qty taken.
+struct Fill {
+  OrderId maker_id{};
+  Price price{};
+  Qty qty{};
+  bool operator==(const Fill&) const = default;
+};
+
 struct BookConfig {
   Price max_price{1'000'000};
   bool operator==(const BookConfig&) const = default;
@@ -94,6 +113,17 @@ inline const char* to_string(STP v) noexcept {
   switch (v) {
     case STP::CancelTaking: return "CancelTaking";
     case STP::CancelResting: return "CancelResting";
+  }
+  return "?";
+}
+inline const char* to_string(Status v) noexcept {
+  switch (v) {
+    case Status::Ok: return "Ok";
+    case Status::WouldCross: return "WouldCross";
+    case Status::UnknownOrder: return "UnknownOrder";
+    case Status::Oversized: return "Oversized";
+    case Status::InvalidQty: return "InvalidQty";
+    case Status::InvalidPrice: return "InvalidPrice";
   }
   return "?";
 }
