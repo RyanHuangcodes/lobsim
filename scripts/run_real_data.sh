@@ -51,10 +51,11 @@ if [ -d "$data_dir" ]; then
   done < <(find "$data_dir" -maxdepth 1 -type f -name '*_message_*.csv' | sort)
 fi
 
-render() { python3 - "$report" "$@" <<'PY'
+render() { RUN_REAL_DATA_ROOT="$root" RUN_REAL_DATA_DIR="$data_dir" python3 - "$report" "$@" <<'PY'
 import json, os, re, sys
 
 report, kind = sys.argv[1], sys.argv[2]
+ROOT, DATA_DIR = os.environ["RUN_REAL_DATA_ROOT"], os.environ["RUN_REAL_DATA_DIR"]
 BEGIN, END = "<!-- REAL-DATA:BEGIN -->", "<!-- REAL-DATA:END -->"
 MODES = ["strict", "report", "resync"]
 
@@ -85,9 +86,14 @@ def pct(n, d):
     return "n/a" if d == 0 else "%d.%02d" % divmod(n * 10000 // d, 100)
 
 
+def shown(path):  # a folder as the report names it: relative to the repository when inside it
+    rel = os.path.relpath(os.path.abspath(path), ROOT)
+    return (path if rel.startswith("..") else rel).rstrip("/") + "/"
+
+
 def results_block(outdir, stems):
     lines = ["### Results", "",
-             "Written by `scripts/run_real_data.sh` from the files in `data/lobster/`; each run's `summary.json` is under `build/real_data/`.",
+             "Written by `scripts/run_real_data.sh` from the files in `" + shown(DATA_DIR) + "`; each run's `summary.json` is under `" + shown(outdir) + "`.",
              "Strict, report and resync use the default compare depth and trust depth. A strict run that stops is a result: it names the first row that is not exact.",
              ""]
     for stem in stems:

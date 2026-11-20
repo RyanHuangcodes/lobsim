@@ -312,6 +312,21 @@ if(Python3_Interpreter_FOUND)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/make_seeds.py
       --check ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/diff
       --check-builder ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/diff_builder)
+  # Dress rehearsal on a short synthetic fake day (upgrade 2b, D5): the D5 table without the
+  # price-window filter, and the audit of every discrepancy with it.
+  add_test(NAME lobster_dress_rehearsal
+    COMMAND ${CMAKE_COMMAND}
+      -DRUN=$<TARGET_FILE:lobsim_run> -DEXPORT=$<TARGET_FILE:lobsim_export_lobster>
+      -DLOBSTER=$<TARGET_FILE:lobsim_lobster> -DPYTHON=${Python3_EXECUTABLE}
+      -DAUDIT=${CMAKE_CURRENT_SOURCE_DIR}/tools/lobster_audit.py
+      -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/configs/default.json
+      -DOUT=${CMAKE_CURRENT_BINARY_DIR}/lobster_dress_rehearsal
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/lobster_dress_rehearsal.cmake)
+  # The audit must fail on a discrepancy it cannot explain and on a number it cannot reproduce.
+  add_test(NAME lobster_audit_self_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/lobster_audit_test.py
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/lobster_audit.py $<TARGET_FILE:lobsim_lobster>
+      ${CMAKE_CURRENT_BINARY_DIR}/lobster_audit_self_test)
 endif()
 
 # Decoder unit tests (upgrade 1, 3.1).

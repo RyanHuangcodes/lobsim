@@ -15,6 +15,7 @@
 - [The LOBSTER files as the code reads them](#the-lobster-files-as-the-code-reads-them)
 - [Getting data, and running the replay on it](#getting-data-and-running-the-replay-on-it)
 - [Real-data results: data not provided yet](#real-data-results-data-not-provided-yet)
+- [Dress rehearsal on synthetic LOBSTER-like data (NOT real market data)](#dress-rehearsal-on-synthetic-lobster-like-data-not-real-market-data)
 - [Synthetic results: the closed loop](#synthetic-results-the-closed-loop)
 - [Synthetic results: the hand-written fixtures](#synthetic-results-the-hand-written-fixtures)
 - [The matching-agreement check and its synthetic examples](#the-matching-agreement-check-and-its-synthetic-examples)
@@ -179,6 +180,214 @@ The canary runs on a real ticker could not be done for the same reason.
 - The empty-level placeholder of the real orderbook files was never verified (D-163): confirm that the
   parser counts no `oracle_malformed` rows.
 
+## Dress rehearsal on synthetic LOBSTER-like data (NOT real market data)
+
+**Everything in this section is synthetic.** `SYNTHA` and `SYNTHB` are made-up tickers: one hour of
+lobsim's own simulator each (`SYNTHA`: default config; `SYNTHB`: informed traders x4, noise traders x2),
+exported by `lobsim_export_lobster --lobster-like` with LOBSTER's quirks: the export starts after a 300 s
+warm-up (the book is already full), messages outside the top-10 window are dropped (price-range
+filtering), a Poisson stream of hidden executions (type 5), and one trading halt (type 7). The halt
+encoding (type 7, price -1, size 0, id 0, direction 1) and the empty-level placeholder (price 0, size 0)
+are **our own stand-ins**; real LOBSTER files may encode both differently. The replay skips any type 7
+whatever its other fields hold, and treats any level of size 0 as empty.
+
+The full real-data sequence ran on both days through the same code path real files will use:
+
+```
+scripts/make_fake_day.sh                    # writes data/synthetic/SYNTHA and data/synthetic/SYNTHB
+scripts/run_real_data.sh --data-dir data/synthetic/SYNTHA --report <scratch file> --out <scratch dir>
+scripts/run_real_data.sh --data-dir data/synthetic/SYNTHB --report <scratch file> --out <scratch dir>
+tools/lobster_audit.py --audit data/synthetic/SYNTHA/SYNTHA_audit.csv --messages ... --orderbook ... \
+    --summary <scratch dir>/SYNTHA_2012-06-21_34200000_57600000_10/resync/summary.json
+```
+
+**Conclusion.** Without price-window filtering, the fake day meets every expectation of the dress
+rehearsal: no level-1 correction, every scored burst agrees, direction, price and delete-size mismatches
+are 0, and the hidden executions and the halt are counted exactly as injected. **With** filtering it
+cannot, under the replay rules as specified: a known order whose delete happens while its price is
+outside the window gets no message and stays in the replayed book, and the resync rule ("too big: reduce
+orders from the tail") then cuts the newest, real orders of its level instead of the stale one. That
+produces level-1 corrections, delete-size mismatches, unknown ids and `queue_order` bursts. Every one of
+them was traced, item by item, to a delete that the filter dropped (or to the opening row's depth), and
+putting only the dropped deletes back makes the day as clean as the unfiltered one (no level-1
+correction, every scored burst agrees, no delete-size mismatch). Real LOBSTER files drop the same messages, so
+real data will show the same effect; other projects report 1.4-2% of orders never removed by any
+message. No check was loosened and nothing was excluded to reach these numbers.
+
+### The full fake days through `run_real_data.sh` (synthetic)
+
+Exact rows before any correction, by depth (synthetic):
+
+| day, mode (synthetic) | lines | depth 1 | depth 2 | depth 5 | depth 10 |
+|---|---|---|---|---|---|
+| SYNTHA strict (stops at line 30,305) | 30,305 | 99.99% (30,304) | 91.98% | 65.14% | 3.60% |
+| SYNTHA report | 356,897 | 15.01% | 9.16% | 5.53% | 0.30% |
+| SYNTHA resync | 356,897 | 99.21% (354,090) | 99.03% | 98.23% | 95.55% |
+| SYNTHB strict (stops at line 23,943) | 23,943 | 99.99% (23,942) | 90.20% | 54.29% | 0.24% |
+| SYNTHB report | 710,477 | 3.47% | 3.06% | 1.82% | 0.00% |
+| SYNTHB resync | 710,477 | 98.98% (703,294) | 98.83% | 98.31% | 96.88% |
+
+`crossed_state` is 0 in every run. Strict mode compares down to depth 1 by default and stops at the first
+row that is not exact; report mode never corrects, so an uncorrected book drifts far.
+
+Resync corrections histogram (synthetic):
+
+| day (synthetic) | corrected, by oracle level 1 to 10 | removed, by rank 1 to 10 | removed beyond L | rows corrected |
+|---|---|---|---|---|
+| SYNTHA | 2,762, 637, 764, 927, 1,172, 1,213, 1,401, 1,629, 1,833, 3,472 | 45, 0, 0, 0, 0, 0, 0, 0, 0, 14 | 80 | 15,866 |
+| SYNTHB | 7,071, 1,082, 1,160, 1,224, 1,306, 1,219, 1,314, 1,370, 1,480, 4,788 | 112, 0, 0, 0, 0, 0, 0, 0, 0, 6 | 100 | 22,131 |
+
+Levels 1 and 10 have the most corrections (SYNTHB: level 1 the most), unlike the closed loop below: the
+stale orders reach the touch when the price comes back.
+
+Counters, resync run (synthetic):
+
+| counter (synthetic) | SYNTHA | SYNTHB |
+|---|---|---|
+| messages (type 1 / 3 / 4 / 5 / 7) | 356,897 (170,864 / 133,927 / 51,414 / 691 / 1) | 710,477 (340,903 / 252,151 / 116,676 / 746 / 1) |
+| submitted, deleted, executed | 170,864, 127,430, 49,343 | 340,902, 244,037, 111,460 |
+| `seed_orders`, `consumed_by_seed` | 20, 1 | 20, 1 |
+| `seed_attributed`, `unknown_id` | 997, 7,570 | 2,194, 11,136 |
+| `delete_size_mismatch`, `oversized_reduce` | 6,243, 527 | 6,665, 1,543 |
+| `direction_mismatch`, `price_mismatch`, `dup_id`, `submit_would_cross` | 0, 0, 0, 0 | 0, 0, 0, 0 |
+| `hidden_exec` (injected) | 691 (691) | 746 (746) |
+| `halt` (injected) | 1 (1) | 1 (1) |
+| `parse_rejected`, `time_truncated`, `oracle_malformed`, `oracle_rejected` | 0, 0, 0, 0 | 0, 0, 0, 0 |
+
+Matching agreement, resync run (synthetic; agree / scored, with every exclusion):
+
+| day, trust depth T (synthetic) | agree / scored | exact | via synthetic | queue order | size split | price skip, length | excluded unknown | excluded untrusted |
+|---|---|---|---|---|---|---|---|---|
+| SYNTHA, T = 1 | 0 / 0 (n/a) | 0 | 0 | 0 | 0 | 0, 0 | 1,305 | 29,126 |
+| SYNTHA, T = 3 (headline) | 25,334 / 28,881 (87.71%) | 25,204 | 130 | 3,547 | 0 | 0, 0 | 1,305 | 245 |
+| SYNTHA, T = 10 | 24,497 / 27,977 (87.56%) | 24,367 | 130 | 3,480 | 0 | 0, 0 | 1,305 | 1,149 |
+| SYNTHB, T = 1 | 0 / 0 (n/a) | 0 | 0 | 0 | 0 | 0, 0 | 3,471 | 65,603 |
+| SYNTHB, T = 3 (headline) | 47,389 / 65,148 (72.74%) | 47,102 | 287 | 17,757 | 2 | 0, 0 | 3,471 | 455 |
+| SYNTHB, T = 10 | 46,541 / 64,117 (72.58%) | 46,255 | 286 | 17,574 | 2 | 0, 0 | 3,471 | 1,486 |
+
+SYNTHA has 30,431 bursts and SYNTHB 69,074. In strict and report mode every scored burst agrees (SYNTHA
+T = 3: 2,043/2,043 and 2,074/2,074), but few are scored: a burst counts only when the row before it is
+exact before correction, and without resync few rows stay exact.
+
+### Taking the quirks apart (synthetic)
+
+Each day was exported five times from one simulator run with the exporter's switches (`--no-filter-window`,
+`--no-halt`, `--hidden-rate 0`, `--window-start-s 0`) and replayed in resync mode. Direction and price
+mismatches are 0 in all ten runs.
+
+| SYNTHA variant (synthetic) | lines | filtered | level-1 corrections | corrections by level 1 to 10 | `unknown_id` | delete-size mismatch | oversized | agreement, T = 3 | queue order | hidden / halt |
+|---|---|---|---|---|---|---|---|---|---|---|
+| (a) window start only | 364,599 | 0 | 0 | 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 | 31 | 0 | 0 | 30,403 / 30,403 (100.00%) | 0 | 0 / 0 |
+| (b) (a) + hidden executions + halt | 365,291 | 0 | 0 | 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 | 31 | 0 | 0 | 30,403 / 30,403 (100.00%) | 0 | 691 / 1 |
+| (c) filter only | 385,661 | 8,951 | 3,323 | 3,270, 745, 859, 1,049, 1,305, 1,308, 1,480, 1,699, 1,900, 3,739 | 8,359 | 6,760 | 643 | 26,935 / 31,094 (86.62%) | 4,159 | 0 / 0 |
+| (d) the full fake day | 356,897 | 8,394 | 2,807 | 2,762, 637, 764, 927, 1,172, 1,213, 1,401, 1,629, 1,833, 3,472 | 7,570 | 6,243 | 527 | 25,334 / 28,881 (87.71%) | 3,547 | 691 / 1 |
+| (e) no window start, no filter | 394,612 | 0 | 0 | all 0 | 0 | 0 | 0 | 32,897 / 32,897 (100.00%) | 0 | 0 / 0 |
+
+| SYNTHB variant (synthetic) | lines | filtered | level-1 corrections | corrections by level 1 to 10 | `unknown_id` | delete-size mismatch | oversized | agreement, T = 3 | queue order | hidden / halt |
+|---|---|---|---|---|---|---|---|---|---|---|
+| (a) window start only | 733,994 | 0 | 0 | 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 | 29 | 0 | 0 | 69,041 / 69,041 (100.00%) | 0 | 0 / 0 |
+| (b) (a) + hidden executions + halt | 734,741 | 0 | 0 | 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 | 29 | 0 | 0 | 69,041 / 69,041 (100.00%) | 0 | 746 / 1 |
+| (c) filter only | 767,961 | 25,606 | 8,248 | 8,128, 1,195, 1,306, 1,400, 1,561, 1,549, 1,586, 1,634, 1,812, 5,377 | 13,166 | 7,779 | 1,697 | 51,265 / 69,751 (73.49%) | 18,486 | 0 / 0 |
+| (d) the full fake day | 710,477 | 24,264 | 7,183 | 7,071, 1,082, 1,160, 1,224, 1,306, 1,219, 1,314, 1,370, 1,480, 4,788 | 11,136 | 6,665 | 1,543 | 47,389 / 65,148 (72.74%) | 17,757 | 746 / 1 |
+| (e) no window start, no filter | 793,567 | 0 | 0 | all 0 | 0 | 0 | 0 | 74,254 / 74,254 (100.00%) | 0 | 0 / 0 |
+
+(Level-1 corrections count corrected levels plus removed levels at rank 1. SYNTHB (d) also has 2
+`size_split` bursts, explained below.)
+
+The rehearsal found one real bug, now fixed (D-211): two aggressive orders at the same nanosecond that
+split one resting order were scored as a `size_split`; it was the only mismatched burst of every
+unfiltered variant before the fix.
+
+Variants (a) and (b) are not entirely free of corrections: each has one correction at level 10 and 31
+(SYNTHA) or 29 (SYNTHB) unknown ids. Every one of those messages names an order that rested **below the
+10 published levels when the window opened** (SYNTHA's true book had 15 ask levels at line 1), referenced
+before its price was ever inside the published window; the correction is such a level coming into view.
+The opening row shows only L levels, so nothing in the files can tell the replay about those orders.
+SYNTHA's variant (a) exported with 20 levels has no unknown id, no correction, and exactly 31 more seed
+attributions. Real files have the same limit.
+
+### Where every discrepancy of the filtered days comes from (synthetic)
+
+`tools/lobster_audit.py` replays the files again independently, requires every number of `summary.json`
+to come out the same, checks the exporter's ground truth (`--audit`) against every orderbook row and every
+burst, and then traces each discrepancy to a root (see D-214 for the rules). It reproduced all ten runs
+above exactly and left nothing unexplained. Full fake days (synthetic):
+
+| item (synthetic) | SYNTHA | SYNTHB | root |
+|---|---|---|---|
+| level-1 corrections and removals | 2,807 | 7,183 | a stale order at that level, its delete filtered (all) |
+| ... the message on that line: unknown id of an order cut by a resync trim | 2,085 | 5,175 | |
+| ... an oversized execution of a trimmed order | 527 | 1,543 | |
+| ... a delete of a trimmed order (size mismatch) | 195 | 465 | |
+| corrected levels, every depth | 15,810 | 22,014 | stale order 15,805 / 21,988; synthetic order holding filtered-deleted quantity 4 / 22; filtered submission 0 / 2; order cut by an explained trim 0 / 1; opening depth 1 / 1 |
+| removed levels, every rank | 139 | 218 | stale order 137 / 218; synthetic order holding filtered-deleted quantity 2 / 0 |
+| `delete_size_mismatch` | 6,243 | 6,665 | an order cut by a resync trim (all) |
+| `oversized_reduce` | 527 | 1,543 | an order cut by a resync trim (all) |
+| `unknown_id` | 7,570 | 11,136 | an order cut by a resync trim 7,569 / 11,135; a seed order drawn down by trimmed orders 1 / 0; a filtered submission 0 / 1 |
+| bursts whose comparison disagrees (scored or not) | 3,600 | 17,897 | stale order 3,600 / 17,785; synthetic order holding filtered-deleted quantity 0 / 112 |
+| `excluded_unknown` bursts | 1,305 | 3,471 | an order cut by a resync trim (all) |
+
+Every resync trim that cut a real order was itself explained: its level held a stale order whose delete
+was filtered, or a synthetic order holding the quantity of orders deleted outside the window. The filter
+dropped 8,393 deletes and 1 submission in SYNTHA (d), 24,258 deletes and 6
+submissions in SYNTHB (d).
+
+**Counterfactual (synthetic).** The same full days with only the filtered **deletes** put back (rows are
+the true book after each message):
+
+| (synthetic) | level-1 corrections | corrections by level | `unknown_id` | delete-size mismatch | agreement, T = 3 |
+|---|---|---|---|---|---|
+| SYNTHA, deletes put back | 0 | 0, ..., 0, 1 (level 10) | 32 | 0 | 30,403 / 30,403 (100.00%) |
+| SYNTHB, deletes put back | 0 | 0, ..., 0, 7 (level 10), 1 removal at rank 10 | 30 | 0 | 69,041 / 69,041 (100.00%) |
+| SYNTHA, submissions put back instead | 2,807 | as (d), one more at level 10 | 7,570 | 6,243 | 25,334 / 28,881 (87.71%) |
+
+With the deletes back, each day is variant (b) plus the effect of its few filtered submissions (one more
+unknown id each, and a few corrections at level 10).
+
+**An alternative that was measured, not adopted.** Trimming an over-full level from its oldest orders
+instead of the newest, measured with the independent replay of the audit tool, cuts SYNTHA's level-1
+corrections from 2,807 to 1 (corrections by level 1, 4, 1, 7, 20, 56, 98, 189, 382, 2,325; delete-size
+mismatches 187; agreement 30,402/30,403) and SYNTHB's from 7,183 to 71 (68,969/68,974). It departs from
+the replay rule of spec upgrade 2, 4.4 ("reduce orders from the tail, which keeps older orders' queue
+positions") and still does not reach zero, so the replayer keeps the tail rule (D-212, D-213). Whether
+oldest-first would also help on real files cannot be checked without them.
+
+**Short days vary.** Ten-minute runs of the default config (six seeds, 60 s or 300 s warm-up): without the
+filter all twelve were clean; with it, five of twelve had level-1 corrections, four of twelve less than
+100% agreement, and all twelve had delete-size mismatches. A test that asserted 0 and 100% on a filtered
+day would pass or fail with the seed.
+
+### The mutation canaries on the fake days (synthetic)
+
+Strict mode, the canary check of the closed loop, does not work as a detector here: the bug-free replay
+also stops, at line 7 when comparing all 10 levels (the opening row's depth) and, on the filtered days,
+at line 30,305 (SYNTHA) and 23,943 (SYNTHB) when comparing level 1 (the filter). The natural detector is
+the dress-rehearsal check in resync mode (the ctest below), which the bug-free build passes.
+
+| canary (synthetic) | SYNTHA: caught by, first line | SYNTHB: caught by, first line |
+|---|---|---|
+| `DIRECTION_IS_AGGRESSOR` | level-1 divergence and `direction_mismatch` (24,035 on the full day), line 4 | the same (54,886), line 7 |
+| `APPLY_HIDDEN` | `hidden_exec` 0, 691 injected; from line 31, the first type 5 | `hidden_exec` 0, 746 injected; from line 1,646, the first type 5 (1,674 in variant (b)) |
+| `NO_SEED` | level-1 correction at line 1 | level-1 correction at line 1 |
+
+All three are caught on both days, in variant (b) and on the full day. `APPLY_HIDDEN` never changes the
+book here: a hidden execution of the fake day is at a price between the best bid and ask with a random
+direction, and none met a synthetic order of its side and price, so each became an unknown id (`unknown_id`
+rises by exactly the injected count) and strict mode cannot see it; the counter check does. The audit
+tool also fails on each canary's summary of SYNTHA's full day (the independent replay does not reproduce
+it).
+
+### The CI test (synthetic)
+
+`lobster_dress_rehearsal` builds a short fake day in the build tree (`configs/default.json`, seed
+20120621, 600 simulated seconds, 60 s warm-up) and asserts: without the filter, no correction above level
+10, no removed level, every scored burst agrees at every trust depth, no direction, price or delete-size
+mismatch and no oversized reduction, `hidden_exec` and `halt` equal to the injected counts, and
+`unknown_id` equal to the audit's count of references to orders below level 10 at the window start (13 on
+macOS); on the full day, the injected counts, no direction or price mismatch, and the audit reproducing
+every number and explaining every discrepancy (393 level-1 items on macOS). It fails for each of the three
+canaries.
+
 ## Synthetic results: the closed loop
 
 **These numbers are synthetic**: lobsim's simulator (default config, seed 7, 60 simulated seconds) is
@@ -298,7 +507,10 @@ and replayed in resync mode (rows are before correction):
 At L = 10 the 600 s run (and the 60 s run above) had no level-1 correction. At L = 1 the touch is also the
 deepest level, so every level that surfaces is corrected there. A level-1 correction in a filtered replay
 is therefore a bug signal only when the window is deep relative to the book's churn, as it is at L = 10
-in these synthetic runs; whether L = 10 is deep enough for a real ticker is not known.
+in these synthetic runs; whether L = 10 is deep enough for a real ticker is not known. Over a whole hour
+it is not deep enough even for the simulator: the synthetic fake days of the
+[dress rehearsal](#dress-rehearsal-on-synthetic-lobster-like-data-not-real-market-data) have thousands of
+level-1 corrections at L = 10, and every one traces to a delete the filter dropped.
 
 ## Mutation canaries
 
@@ -326,7 +538,9 @@ simulator has no hidden orders, so its export has none; the hand-written fixture
 at a price where seed liquidity sits; the type 5 row of `basic_types` is at a price with nothing on that
 side, so applying it changes nothing) is what catches it. Every canary is caught by at least one
 committed fixture. CI runs the three canaries (job `replay-canary`) and passes only when each replay
-exits with code 2.
+exits with code 2. On the hour-long synthetic fake days all three are caught as well, by the
+dress-rehearsal check in resync mode rather than by strict mode (see
+[the dress rehearsal](#the-mutation-canaries-on-the-fake-days-synthetic)).
 
 ## What others did, and what lobsim does
 
@@ -354,7 +568,12 @@ and what lobsim does about each point:
   other days, other exchanges or other regimes.
 - Deep levels are structurally unreliable on filtered data: LOBSTER only emits messages for events inside
   the requested levels, so liquidity can enter or leave the window with no message. Deep-level
-  mismatches are expected and say little about the engine; the touch is what the replay stands behind.
+  mismatches are expected and say little about the engine. Over a long day the touch is affected too:
+  orders whose deletes were dropped while their price was outside the window stay in the replay and reach
+  the touch when the price comes back. The synthetic fake days show thousands of level-1 corrections
+  with filtering and none without, every one traced to a dropped delete, so on real data a level-1
+  correction is not by itself a sign of an engine bug, whatever the replay's one-screen summary says
+  (it prints the interpretation rule of the specification).
 - Seed attribution loses order identity and queue position for everything resting at the open, and
   message 1's order lives inside a synthetic seed order.
 - Hidden liquidity is excluded: type 5 executions are skipped, so anything they trade against is not in

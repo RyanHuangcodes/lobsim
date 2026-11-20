@@ -34,7 +34,7 @@ cmake --preset debug    && cmake --build --preset debug -j    && ctest --preset 
 cmake --preset sanitize && cmake --build --preset sanitize -j && ctest --preset sanitize   # ASan + UBSan
 ```
 
-The suite has 504 tests in the debug and release builds and 505 in the sanitize build (one pool test exists only under AddressSanitizer). All three builds compile with `-Wall -Wextra -Wpedantic -Werror` (`LOBSIM_WERROR`, on by default). The libFuzzer targets and the commands to build them (`-DLOBSIM_FUZZ=ON`, LLVM Clang only) are in [FUZZING.md](FUZZING.md). On an Apple M4 the sanitize suite takes about 100 seconds, most of it the differential fuzz test.
+The suite has 515 tests in the debug and release builds and 516 in the sanitize build (one pool test exists only under AddressSanitizer). All three builds compile with `-Wall -Wextra -Wpedantic -Werror` (`LOBSIM_WERROR`, on by default). The libFuzzer targets and the commands to build them (`-DLOBSIM_FUZZ=ON`, LLVM Clang only) are in [FUZZING.md](FUZZING.md). On an Apple M4 the sanitize suite takes about 100 seconds, most of it the differential fuzz test.
 
 Run the default one-hour simulation, check its replay, and draw its plots:
 
@@ -91,7 +91,7 @@ Export a run in LOBSTER format and replay it against its own book with the LOBST
 | `apps` | `lobsim_run`, `lobsim_replay`, `lobsim_bench` |
 | `bench` | Google Benchmark microbenchmarks |
 | `tests` | unit tests, differential fuzz test, determinism and replay tests, simulator stress tests |
-| `tools` | `plot.py`, `sweep.py` |
+| `tools` | `plot.py`, `sweep.py`, `lobster_audit.py` (checks a replay of a synthetic LOBSTER-like export against the exporter's ground truth) |
 | `docs/sample_run` | the plots of the sample run below |
 
 ## The matching engine
@@ -397,6 +397,8 @@ Three numbers from the **synthetic** closed loop (lobsim's own simulator, seed 7
 - exact rows before any correction (synthetic): 4621 of 4621 (100.00%) at every depth 1 to 10;
 - level-1 corrections in the filtered closed loop at L = 10 (synthetic): 0 in 4,583 rows (23 corrections, all at levels 9 and 10); at smaller L they appear (measured in 600 s runs; 60 s runs at L = 5 and 3 showed none), as [REAL_DATA.md](REAL_DATA.md) explains;
 - matching agreement at trust depth 3 (synthetic): 370 of 370 bursts (100.00%), none excluded. The simulator matches itself, so 100% is the expected result; a real market is not.
+
+Dress rehearsal on two **synthetic** LOBSTER-like fake days (one simulated hour each, book already full at the start, hidden executions, a halt, price-window filtering; not market data), run through `scripts/run_real_data.sh`: without the price-window filter there is no level-1 correction and every scored burst agrees (SYNTHA 30,403 of 30,403 at trust depth 3); with it, level-1 corrections (2,807 in SYNTHA) and agreement below 100% (87.71%) appear, and `tools/lobster_audit.py` traces every one of them to a delete the filter dropped, which real LOBSTER files drop too. Details, the canaries and the CI test `lobster_dress_rehearsal`: [REAL_DATA.md](REAL_DATA.md#dress-rehearsal-on-synthetic-lobster-like-data-not-real-market-data).
 
 ## What is not modelled
 

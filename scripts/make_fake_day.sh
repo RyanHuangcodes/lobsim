@@ -3,6 +3,7 @@
 #   scripts/make_fake_day.sh [--bin-dir DIR] [--out DIR]
 # SYNTHETIC DATA, NOT MARKET DATA. Deterministic: same binaries and seeds, same bytes. Each day is a
 # 300 s warm-up plus 3600 s of window, L = 10. Never writes into data/lobster/ (the exporter refuses).
+# Next to each day: <ticker>_audit.csv, the exporter's ground truth for tools/lobster_audit.py.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -33,7 +34,7 @@ make_day() {  # ticker config sim-seed hidden-seed
   rm -rf "$work"
   "$bin_dir/lobsim_run" --config "$config" --seed "$seed" --duration-s $((warmup + window)) --out "$work" >/dev/null
   "$bin_dir/lobsim_export_lobster" --run "$work" --levels 10 --lobster-like --window-start-s $warmup \
-    --seed "$hidden_seed" --ticker "$ticker" --out "$out/$ticker"
+    --seed "$hidden_seed" --ticker "$ticker" --out "$out/$ticker" --audit "$out/$ticker/${ticker}_audit.csv"
   rm -rf "$work"
 }
 
