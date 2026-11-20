@@ -231,7 +231,7 @@ jobs:
         run: |
           cmake -S . -B build-normal -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14
-          cmake --build build-normal -j "$(nproc)" --target lobsim_run lobsim_export_lobster
+          cmake --build build-normal -j "$(nproc)" --target lobsim_run lobsim_export_lobster lobsim_lobster
           build-normal/lobsim_run --config configs/default.json --seed 7 --duration-s 60 --out closed-loop/run
           build-normal/lobsim_export_lobster --run closed-loop/run --levels 10 --out closed-loop/lobster
       - name: Configure the canary build
@@ -246,6 +246,21 @@ jobs:
         run: cmake --build build-replay-canary -j "$(nproc)"
       - name: Fixture replays must fail with exit code 2
         run: ctest --test-dir build-replay-canary --output-on-failure --no-tests=error -V
+      - name: Control, no bug - the closed-loop replay must be exact (exit code 0)
+        if: matrix.bug != 'APPLY_HIDDEN'
+        run: |
+          set +e
+          build-normal/lobsim_lobster \
+            --messages closed-loop/lobster/SIM_2012-06-21_34200000_57600000_message_10.csv \
+            --orderbook closed-loop/lobster/SIM_2012-06-21_34200000_57600000_orderbook_10.csv \
+            --mode strict --compare-depth 10 > /dev/null
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "FAIL: the normal build exited with $rc on the closed-loop export; a broken export would look like a caught bug"
+            exit 1
+          fi
+          echo "PASS: the normal build replays the closed-loop export exactly (exit code 0)"
       - name: Closed-loop replay must fail with exit code 2
         if: matrix.bug != 'APPLY_HIDDEN'
         run: >

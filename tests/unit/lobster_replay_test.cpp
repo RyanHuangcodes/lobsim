@@ -341,3 +341,39 @@ TEST(MatchingBurst, AgreementRateIsAgreeOverScored) {
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------- hostile input
+
+TEST(LobsterReplayInput, LevelCountAboveTheLimitIsRejectedBeforeAnythingIsSized) {
+  EXPECT_NO_THROW(replay::Replayer(replay::kMaxLevels, {}));
+  EXPECT_THROW(replay::Replayer(replay::kMaxLevels + 1, {}), std::invalid_argument);
+  EXPECT_THROW(replay::Replayer(2'000'000'000, {}), std::invalid_argument);
+  // From a file name: refused before either file is opened, with an input error (exit code 1).
+  for (const char* name : {"x_orderbook_10001.csv", "x_orderbook_536870913.csv", "x_orderbook_2000000000.csv"}) {
+    try {
+      replay::replay_files("missing_message.csv", name, {});
+      ADD_FAILURE() << name << " was accepted";
+    } catch (const replay::InputError& e) {
+      EXPECT_NE(std::string(e.what()).find("at most"), std::string::npos) << e.what();
+    }
+  }
+}
+
+TEST(LobsterReplayMatching, ABurstWhoseSizesDoNotFitIn64BitsIsExcludedAndCounted) {
+  // Two executions at one time and Direction, on two seed orders of 2^63 - 1 lots each: both are
+  // attributable, and their total is more than an int64 can hold.
+  const std::string big = "9223372036854775807";
+  const std::string row = "100," + big + ",-9999999999,0,101," + big + ",-9999999999,0\n";
+  const std::string messages = "34200.000000001,1,1,10,100,-1\n"
+                               "34200.000000002,4,777," + big + ",100,-1\n"
+                               "34200.000000002,4,778," + big + ",101,-1\n";
+  replay::ReplayOptions o;
+  o.mode = replay::Mode::Report;
+  const replay::Summary s = run_text(messages, row + row + row, 2, o);
+  EXPECT_EQ(s.matching.bursts, 1u);
+  EXPECT_EQ(s.matching.burst_messages, 2u);
+  for (const replay::MatchCounts& c : s.matching.by_trust_depth) {
+    EXPECT_EQ(c.excluded_unknown, 1u) << "trust depth " << c.trust_depth;
+    EXPECT_EQ(c.scored(), 0u) << "trust depth " << c.trust_depth;
+  }
+}

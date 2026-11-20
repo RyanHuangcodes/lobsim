@@ -101,6 +101,10 @@ std::optional<Entry> Replayer::Source::next() {
 Replayer::Replayer(int levels, ReplayOptions options)
     : levels_(levels), options_(options), book_(lob::BookConfig{kReplayMaxPrice}) {
   if (levels < 1) throw std::invalid_argument("the level count must be at least 1");
+  if (levels > kMaxLevels) {
+    throw std::invalid_argument("the level count " + std::to_string(levels) + " is above the limit of " +
+                                std::to_string(kMaxLevels));
+  }
   if (options.compare_depth < 1 || options.compare_depth > levels) {
     throw std::invalid_argument("--compare-depth must be between 1 and the file's level count " + std::to_string(levels));
   }
@@ -416,6 +420,10 @@ Summary replay_files(const std::string& messages_path, const std::string& orderb
   if (!levels) {
     throw InputError("cannot read the level count from the orderbook file name " + orderbook_path +
                      " (expected ..._orderbook_<L>.csv)");
+  }
+  if (*levels > kMaxLevels) {
+    throw InputError("the orderbook file name says " + std::to_string(*levels) + " levels, at most " +
+                     std::to_string(kMaxLevels) + " are accepted");
   }
   if (const std::optional<int> m = levels_from_filename(messages_path); m && *m != *levels) {
     throw InputError("the message file name says " + std::to_string(*m) + " levels but the orderbook file name says " +

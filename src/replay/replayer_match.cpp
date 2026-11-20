@@ -108,20 +108,23 @@ void Replayer::check_burst(const Entry& first, Source& source) {
   const lob::Side resting = head.direction > 0 ? lob::Side::Buy : lob::Side::Sell;
   std::unordered_map<lob::OrderId, lob::Qty> taken;
   std::vector<BurstFill> data;
-  bool unknown = false;
+  bool unknown = false;  // also set when a size sum does not fit in 64 bits: the burst cannot be predicted
   std::set<std::int64_t> prices;
   lob::Qty qty = 0;
   std::int64_t limit = head.price;
   for (const Entry* e : burst) {
     const LobsterMsg& m = *e->msg.value;
     prices.insert(m.price);
-    qty += m.size;
+    if (__builtin_add_overflow(qty, m.size, &qty)) unknown = true;  // hostile sizes: counted excluded_unknown
     limit = resting == lob::Side::Sell ? std::max(limit, m.price) : std::min(limit, m.price);
     if (const auto it = by_external_.find(m.order_id); it != by_external_.end()) {
       const std::optional<lob::OrderView> o = book_.order(it->second);
       if (o && taken[o->id] < o->remaining) {
         // A message that disagrees with its order is skipped when applied: it takes nothing.
-        if (o->side == resting && o->price == m.price) taken[o->id] += m.size;
+        if (o->side == resting && o->price == m.price &&
+            __builtin_add_overflow(taken[o->id], m.size, &taken[o->id])) {
+          unknown = true;
+        }
         data.push_back(BurstFill{false, m.order_id, m.price, m.size});
         continue;
       }
@@ -129,7 +132,7 @@ void Replayer::check_burst(const Entry& first, Source& source) {
     bool attributed = false;
     for (const lob::OrderView& o : book_.level_orders(resting, m.price)) {
       if (synthetic_.count(o.id) == 0 || o.remaining - taken[o.id] < m.size) continue;
-      taken[o.id] += m.size;
+      if (__builtin_add_overflow(taken[o.id], m.size, &taken[o.id])) unknown = true;
       data.push_back(BurstFill{true, 0, m.price, m.size});
       attributed = true;
       break;
@@ -140,12 +143,14 @@ void Replayer::check_burst(const Entry& first, Source& source) {
   // The prediction: one aggressive order on the other side, up to the burst's worst price.
   const lob::Side taker = lob::opposite(resting);
   std::vector<BurstFill> predicted;
-  for (const lob::Fill& f : book_.preview_match(taker, limit, qty)) {
-    const auto ext = external_of_.find(f.maker_id);
-    if (synthetic_.count(f.maker_id) != 0 || ext == external_of_.end()) {
-      predicted.push_back(BurstFill{true, 0, f.price, f.qty});
-    } else {
-      predicted.push_back(BurstFill{false, ext->second, f.price, f.qty});
+  if (!unknown) {
+    for (const lob::Fill& f : book_.preview_match(taker, limit, qty)) {
+      const auto ext = external_of_.find(f.maker_id);
+      if (synthetic_.count(f.maker_id) != 0 || ext == external_of_.end()) {
+        predicted.push_back(BurstFill{true, 0, f.price, f.qty});
+      } else {
+        predicted.push_back(BurstFill{false, ext->second, f.price, f.qty});
+      }
     }
   }
 

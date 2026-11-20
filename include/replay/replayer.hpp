@@ -26,6 +26,10 @@ namespace replay {
 // ITCH's largest price, $200,000.0000 at 4 implied decimals: the replay book's max_price.
 inline constexpr lob::Price kReplayMaxPrice = 2'000'000'000;
 
+// The largest level count accepted: far above anything LOBSTER offers, and small enough that
+// 4 * L columns, and the per-level tables sized by L, cannot overflow or exhaust memory.
+inline constexpr int kMaxLevels = 10'000;
+
 // strict: stop at the first row that is not exact down to compare_depth.
 // report:  never correct the book, only count.
 // resync:  after counting, correct the book to the oracle row (inside its window only).
@@ -209,7 +213,7 @@ struct Entry {
 
 class Replayer {
  public:
-  // levels: L of the orderbook file. Throws std::invalid_argument for an option out of range.
+  // levels: L of the orderbook file (1..kMaxLevels). Throws std::invalid_argument for an option out of range.
   Replayer(int levels, ReplayOptions options);
   Replayer(const Replayer&) = delete;
   Replayer& operator=(const Replayer&) = delete;

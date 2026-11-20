@@ -73,8 +73,8 @@ name and must agree with its column count; the message file name's `L`, if it ha
 
 **Line numbering and the opening book.** Lines are numbered from 1, the same in both files. The book is
 not empty at 9:30, so line 1 of the orderbook file is used to **seed** the replay book with synthetic
-orders (one per published level, with ids outside the real range), and message 1 is counted as
-consumed by the seed. Later cancels and executions that name an order the seed holds are taken from a
+orders (one per published level; they carry no external order id at all, the engine gives them ids from
+its own dense range), and message 1 is counted as consumed by the seed. Later cancels and executions that name an order the seed holds are taken from a
 synthetic order at that price on that side (*seed attribution*), which loses the order's identity and
 queue position.
 
@@ -142,6 +142,17 @@ this is what to record here, for at least two tickers, from the three modes abov
 
 The canary runs on a real ticker could not be done for the same reason.
 
+**First things to check on real data.** These are risks that cannot be examined without files:
+
+- If `price_mismatch` is large, revisit D-170. A type 2, 3 or 4 message whose price differs from its
+  known order's price is skipped and counted. LOBSTER might print the execution price for an ITCH
+  "execute with price" (C) message, which can differ from the resting order's price, so such executions
+  would be skipped wrongly. The code assumes the message price is the resting order's price.
+- If `unknown_id` or `direction_mismatch` is large, look at the first examples in `divergences.csv`
+  and the strict-mode report before drawing any conclusion about deep levels.
+- The empty-level placeholder of the real orderbook files was never verified (D-163): confirm that the
+  parser counts no `oracle_malformed` rows.
+
 ## Synthetic results: the closed loop
 
 **These numbers are synthetic**: lobsim's simulator (default config, seed 7, 60 simulated seconds) is
@@ -172,8 +183,9 @@ type 5 messages.
 | 3 (headline) | 370 / 370 (100.00%) | 370 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | 10 | 370 / 370 (100.00%) | 370 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
-At T = 1 every burst is excluded: a burst needs `T` greater than its number of distinct prices, and a
-depth of 1 never is. Lobsim matches itself exactly because the data was produced by the same rules; a real
+At T = 1 every burst is excluded: the rule needs `T` of at least the burst's number of distinct prices plus
+one, and a burst has at least one price, so T = 1 is always 0/0 and its row carries no information (it is
+printed so the rule can be seen). Lobsim matches itself exactly because the data was produced by the same rules; a real
 market is not expected to give 100%.
 
 **Filtered export, resync mode at L = 10 (synthetic).** The export keeps only messages inside the top-10

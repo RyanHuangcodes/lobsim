@@ -395,7 +395,7 @@ All three injected bugs are caught in under 1 s from the seed corpus, and in und
 Three numbers from the **synthetic** closed loop (lobsim's own simulator, seed 7, 60 s, exported to LOBSTER format with 10 levels and replayed; not a market):
 
 - exact rows before any correction (synthetic): 4621 of 4621 (100.00%) at every depth 1 to 10;
-- level-1 corrections in the filtered closed loop at L = 10 (synthetic): 0 in 4,583 rows (23 corrections, all at levels 9 and 10); at smaller L they appear, as [REAL_DATA.md](REAL_DATA.md) explains;
+- level-1 corrections in the filtered closed loop at L = 10 (synthetic): 0 in 4,583 rows (23 corrections, all at levels 9 and 10); at smaller L they appear (measured in 600 s runs; 60 s runs at L = 5 and 3 showed none), as [REAL_DATA.md](REAL_DATA.md) explains;
 - matching agreement at trust depth 3 (synthetic): 370 of 370 bursts (100.00%), none excluded. The simulator matches itself, so 100% is the expected result; a real market is not.
 
 ## What is not modelled
