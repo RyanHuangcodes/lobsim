@@ -2,23 +2,11 @@
 
 #include <cstdint>
 #include <iosfwd>
-#include <stdexcept>
-#include <string>
 
 #include "lob/types.hpp"
+#include "sim/order_log.hpp"
 
 namespace sim {
-
-// A malformed orders.log: `line` is the 1-based line number.
-class ReplayError : public std::runtime_error {
- public:
-  ReplayError(std::size_t line, const std::string& what)
-      : std::runtime_error("line " + std::to_string(line) + ": " + what), line_(line) {}
-  std::size_t line() const noexcept { return line_; }
-
- private:
-  std::size_t line_;
-};
 
 struct ReplayResult {
   lob::Price max_price{0};

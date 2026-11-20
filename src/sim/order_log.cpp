@@ -3,6 +3,8 @@
 #include <array>
 #include <charconv>
 #include <cstdint>
+#include <istream>
+#include <sstream>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -143,6 +145,43 @@ std::optional<std::pair<TimeNs, lob::Request>> parse_request(std::string_view li
     default:
       return std::nullopt;
   }
+}
+
+OrderLogReader::OrderLogReader(std::istream& in) : in_(in) {
+  if (!std::getline(in_, line_)) throw ReplayError(1, "empty log: the header line is missing");
+  const auto max_price = parse_header(line_);
+  if (!max_price) throw ReplayError(1, "malformed header: " + line_);
+  max_price_ = *max_price;
+}
+
+std::optional<LoggedRequest> OrderLogReader::next() {
+  if (!std::getline(in_, line_)) return std::nullopt;
+  ++line_no_;
+  const auto parsed = parse_request(line_);
+  if (!parsed) throw ReplayError(line_no_, "malformed request: " + line_);
+  if (parsed->first < previous_time_)
+    throw ReplayError(line_no_, "time goes backwards: " + std::to_string(parsed->first) + " after " +
+                                    std::to_string(previous_time_));
+  previous_time_ = parsed->first;
+  return LoggedRequest{parsed->first, parsed->second};
+}
+
+OrderLog parse_order_log(std::string_view contents) {
+  std::istringstream in{std::string(contents)};
+  OrderLogReader reader(in);
+  OrderLog log{reader.max_price(), {}};
+  while (auto r = reader.next()) log.requests.push_back(*r);
+  return log;
+}
+
+std::string format_order_log(const OrderLog& log) {
+  std::string out = format_header(log.max_price);
+  out.push_back('\n');
+  for (const LoggedRequest& r : log.requests) {
+    append_request(out, r.time, r.request);
+    out.push_back('\n');
+  }
+  return out;
 }
 
 }  // namespace sim

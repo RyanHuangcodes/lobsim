@@ -77,6 +77,19 @@ TEST(Replay, LogParsedFromTextReproducesTheEngineHash) {
   }
 }
 
+TEST(Replay, ParseThenFormatOfASimulatorLogIsByteIdentical) {
+  for (std::uint64_t seed : {1ULL, 2ULL}) {
+    std::ostringstream log;
+    Simulator s(simtest::noise_config(10, seed, 30.0), SimulatorOptions{&log});
+    s.run();
+    const OrderLog parsed = parse_order_log(log.str());
+    EXPECT_EQ(format_order_log(parsed), log.str()) << "seed " << seed;
+    EXPECT_EQ(parsed.requests.size(), s.exchange().requests());
+    EXPECT_EQ(parsed.requests.size(), replay_text(log.str()).requests);
+    EXPECT_GT(parsed.requests.size(), 0u);
+  }
+}
+
 TEST(Replay, ReplayIsSensitiveToTheLog) {
   std::ostringstream log;
   Simulator s(simtest::noise_config(10, 4, 20.0), SimulatorOptions{&log});
