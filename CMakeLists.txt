@@ -71,6 +71,9 @@ target_include_directories(lob PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(lob PUBLIC cxx_std_20)
 target_link_libraries(lob PRIVATE lobsim_options)
 
+# Shared differential driver and the crash-file decoder (upgrade 1).
+add_subdirectory(fuzz)
+
 # The simulator. It depends on lob; lob does not depend on it.
 add_library(sim STATIC
   src/sim/as_market_maker.cpp
@@ -151,6 +154,19 @@ foreach(_first RANGE 1 181 20)
   math(EXPR _last "${_first} + 19")
   add_test(NAME fuzz_diff_seeds_${_first}_${_last} COMMAND fuzz_diff --first-seed ${_first} --seeds 20)
 endforeach()
+
+# Regression test (upgrade 1, 3.4): every file of fuzz/regressions/diff and fuzz/corpus/diff
+# through run_diff. The files are listed when the test runs, so a new file needs no rebuild
+# and no re-configure; hence no gtest_discover_tests here (its cached list would skip it).
+add_executable(fuzz_regression_tests tests/fuzz_regressions.cpp)
+target_link_libraries(fuzz_regression_tests PRIVATE fuzz_driver lobsim_options GTest::gtest_main)
+target_compile_definitions(fuzz_regression_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME fuzz_regressions_diff COMMAND fuzz_regression_tests --gtest_filter=Diff/*)
+
+# Decoder unit tests (upgrade 1, 3.1).
+add_executable(fuzz_decode_tests tests/unit/fuzz_decode_test.cpp)
+target_link_libraries(fuzz_decode_tests PRIVATE fuzz_driver lobsim_options GTest::gtest_main)
+gtest_discover_tests(fuzz_decode_tests)
 
 # Benchmarks (SPEC 7). Meaningful only in the release preset; the debug and sanitize
 # builds compile them and run a short smoke test of the throughput harness.
