@@ -112,8 +112,9 @@ target_link_libraries(lob PRIVATE lobsim_options)
 add_library(orderlog STATIC src/sim/order_log.cpp src/sim/replay.cpp)
 target_link_libraries(orderlog PUBLIC lob PRIVATE lobsim_options)
 
-# The LOBSTER message and orderbook line parsers (upgrade 2): lob only, so the fuzz build compiles them too.
-add_library(replay STATIC src/replay/lobster.cpp src/replay/lobster_book.cpp)
+# The LOBSTER line parsers and the replayer (upgrade 2): lob only, so the fuzz build compiles them too.
+add_library(replay STATIC src/replay/lobster.cpp src/replay/lobster_book.cpp src/replay/replayer.cpp
+  src/replay/replayer_report.cpp)
 target_link_libraries(replay PUBLIC lob PRIVATE lobsim_options)
 
 # Shared differential driver and the crash-file decoder (upgrade 1).
@@ -143,6 +144,12 @@ target_link_libraries(lobsim_run PRIVATE sim lobsim_options)
 
 add_executable(lobsim_replay apps/replay_main.cpp)
 target_link_libraries(lobsim_replay PRIVATE sim lobsim_options)
+
+# LOBSTER replay (upgrade 2): the replayer, and the exporter that turns a simulator run into LOBSTER files.
+add_executable(lobsim_lobster apps/lobster_main.cpp)
+target_link_libraries(lobsim_lobster PRIVATE replay lobsim_options)
+add_executable(lobsim_export_lobster apps/export_lobster_main.cpp)
+target_link_libraries(lobsim_export_lobster PRIVATE orderlog replay lobsim_options)
 
 enable_testing()
 include(GoogleTest)
@@ -192,10 +199,31 @@ add_test(NAME cli_run_then_replay
     -DOUT=${CMAKE_CURRENT_BINARY_DIR}/cli_run_then_replay
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_replay.cmake)
 
-# LOBSTER line parsers (upgrade 2).
-add_executable(replay_tests tests/unit/lobster_parse_test.cpp)
-target_link_libraries(replay_tests PRIVATE replay lobsim_options GTest::gtest_main)
+# LOBSTER line parsers and the replayer on the hand-written fixtures (upgrade 2).
+add_executable(replay_tests tests/unit/lobster_parse_test.cpp tests/unit/lobster_replay_test.cpp)
+target_link_libraries(replay_tests PRIVATE replay lobsim_options nlohmann_json::nlohmann_json GTest::gtest_main)
+target_compile_definitions(replay_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 gtest_discover_tests(replay_tests)
+
+# Closed loop (upgrade 2, R4): a 60 s simulator run exported to LOBSTER files and replayed. Unfiltered:
+# strict mode must be exact on every row at depth 10. Filtered to the top-10 window: resync mode
+# must make no correction at level 1. Everything is generated in the build directory.
+foreach(_variant unfiltered filtered)
+  add_test(NAME lobster_closed_loop_${_variant}
+    COMMAND ${CMAKE_COMMAND}
+      -DRUN=$<TARGET_FILE:lobsim_run> -DEXPORT=$<TARGET_FILE:lobsim_export_lobster>
+      -DLOBSTER=$<TARGET_FILE:lobsim_lobster>
+      -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/configs/default.json
+      -DVARIANT=${_variant}
+      -DOUT=${CMAKE_CURRENT_BINARY_DIR}/lobster_closed_loop_${_variant}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/lobster_closed_loop.cmake)
+endforeach()
+add_test(NAME lobster_export_fixture
+  COMMAND ${CMAKE_COMMAND}
+    -DEXPORT=$<TARGET_FILE:lobsim_export_lobster> -DLOBSTER=$<TARGET_FILE:lobsim_lobster>
+    -DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/lobster_export
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/lobster_export_fixture
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/lobster_export_fixture.cmake)
 
 # Differential fuzz test (SPEC 4): OrderBook vs ReferenceBook, event for event.
 add_executable(fuzz_diff tests/fuzz_diff.cpp)

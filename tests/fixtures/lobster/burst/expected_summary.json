@@ -1,0 +1,52 @@
+{
+  "mode": "resync",
+  "levels": 3,
+  "compare_depth": 1,
+  "trust_depth": 3,
+  "completed": true,
+  "strict_failure_line": null,
+  "lines": 12,
+  "rows_compared": 12,
+  "counters": {
+    "messages": 12,
+    "type_1": 6, "type_2": 0, "type_3": 1, "type_4": 5, "type_5": 0, "type_6": 0, "type_7": 0,
+    "parse_rejected": 0,
+    "time_truncated": 0,
+    "consumed_by_seed": 1,
+    "seed_orders": 1,
+    "seed_rejected": 0,
+    "submitted": 5,
+    "dup_id": 0,
+    "submit_would_cross": 0,
+    "submit_bad_price": 0,
+    "cancelled": 0,
+    "deleted": 1,
+    "executed": 4,
+    "direction_mismatch": 0,
+    "price_mismatch": 0,
+    "delete_size_mismatch": 0,
+    "oversized_reduce": 0,
+    "seed_attributed": 1,
+    "unknown_id": 0,
+    "hidden_exec": 0,
+    "cross_trade": 0,
+    "halt": 0,
+    "oracle_malformed": 0,
+    "oracle_rejected": 0,
+    "crossed_state": 0
+  },
+  "exact_rows": [
+    {"depth": 1, "exact": 12, "rows": 12, "percent": "100.00"},
+    {"depth": 2, "exact": 12, "rows": 12, "percent": "100.00"},
+    {"depth": 3, "exact": 12, "rows": 12, "percent": "100.00"}
+  ],
+  "divergent_rows": 0,
+  "resync": {
+    "rows": 0,
+    "corrected_by_level": [0, 0, 0],
+    "removed_by_rank": [0, 0, 0],
+    "removed_beyond_level_l": 0,
+    "failed": 0,
+    "skipped_malformed": 0
+  }
+}
