@@ -21,3 +21,8 @@ build-replay-canary*/
 
 # real market data (never committed)
 data/
+graphify-out/
+
+# visual replay dashboard (upgrade 4): generated bundles/site are never committed
+site/
+viz-out/

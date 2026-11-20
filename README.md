@@ -413,3 +413,7 @@ Dress rehearsal on two **synthetic** LOBSTER-like fake days (one simulated hour 
 - Fees enter only the market maker's accounting; no agent decides anything based on them.
 
 Stretch goals: an array-indexed price ladder compared against `std::map`, replay of real LOBSTER data (the replayer exists, the data is pending), and a reinforcement-learning environment wrapper.
+
+## Live dashboard
+
+A browser replay of a simulator run is published to GitHub Pages at `https://<user>.github.io/<repo>/`: the order-book heatmap, the depth ladder, the price / fundamental / MM-quote / trade chart, and the market maker's inventory and PnL, all on one synchronized timeline with play, pause and scrub. How to read each panel, export any run, view it locally, and enable Pages: [DASHBOARD.md](DASHBOARD.md).

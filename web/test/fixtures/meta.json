@@ -1,0 +1,430 @@
+{
+  "schema_version": 1,
+  "run_name": "run",
+  "seed": 42,
+  "config": {
+    "duration_s": 20.0,
+    "fundamental": {
+      "dt_s": 0.1,
+      "sigma_ticks_per_sqrt_s": 1.0
+    },
+    "informed": {
+      "lambda": 2.0,
+      "latency_us": {
+        "entry": 100.0,
+        "feed": 100.0,
+        "jitter": 20.0,
+        "response": 100.0
+      },
+      "size": 5,
+      "theta_ticks": 2.0
+    },
+    "initial_price": 10000,
+    "markout_horizons_s": [
+      1.0,
+      5.0,
+      30.0
+    ],
+    "max_price": 1000000,
+    "mm": {
+      "gamma": 0.0001,
+      "kappa": 1.5,
+      "latency_us": {
+        "entry": 50.0,
+        "feed": 50.0,
+        "jitter": 10.0,
+        "response": 50.0
+      },
+      "maker_fee_ticks": -0.002,
+      "q_max": 50,
+      "quote_size": 5,
+      "requote_interval_ms": 100.0,
+      "sigma_ticks_per_sqrt_s": 1.0,
+      "taker_fee_ticks": 0.003
+    },
+    "noise_traders": {
+      "D": 10,
+      "count": 10,
+      "lambda": 5.0,
+      "latency_us": {
+        "entry": 200.0,
+        "feed": 200.0,
+        "jitter": 50.0,
+        "response": 200.0
+      },
+      "max_size": 10,
+      "order_lifetime_mean_s": 30.0,
+      "p_limit": 0.85,
+      "reference_price": "symmetric"
+    },
+    "sample_interval_s": 1.0,
+    "seed": 42,
+    "tick_display": 0.01,
+    "warmup_s": 0.0
+  },
+  "tick_display": 0.01,
+  "verified_event_hash": "1d2be81cee027063",
+  "time_range_ns": [
+    14113737,
+    19982201995
+  ],
+  "sampling": {
+    "ladder_dt_ns": 500000000,
+    "heatmap_dt_ns": 1000000000,
+    "levels": 10
+  },
+  "ladder_count": 40,
+  "trade_count": 251,
+  "heatmap": {
+    "rows": 30,
+    "cols": 20,
+    "price_hi": 10011,
+    "price_lo": 9982,
+    "dt_ns": 1000000000,
+    "t0_ns": 14113737,
+    "v_max": 251.6593688847324,
+    "pad_ticks": 8,
+    "clipped_share": 0.0
+  },
+  "byte_order": "little",
+  "missing_i32": -2147483648,
+  "series": [
+    {
+      "name": "ladder_time_ns",
+      "type": "f64",
+      "offset": 0,
+      "count": 40
+    },
+    {
+      "name": "best_bid",
+      "type": "i32",
+      "offset": 320,
+      "count": 40
+    },
+    {
+      "name": "best_ask",
+      "type": "i32",
+      "offset": 480,
+      "count": 40
+    },
+    {
+      "name": "spread",
+      "type": "i32",
+      "offset": 640,
+      "count": 40
+    },
+    {
+      "name": "mid",
+      "type": "f64",
+      "offset": 800,
+      "count": 40
+    },
+    {
+      "name": "bid_px_0",
+      "type": "i32",
+      "offset": 1120,
+      "count": 40
+    },
+    {
+      "name": "bid_sz_0",
+      "type": "i32",
+      "offset": 1280,
+      "count": 40
+    },
+    {
+      "name": "ask_px_0",
+      "type": "i32",
+      "offset": 1440,
+      "count": 40
+    },
+    {
+      "name": "ask_sz_0",
+      "type": "i32",
+      "offset": 1600,
+      "count": 40
+    },
+    {
+      "name": "bid_px_1",
+      "type": "i32",
+      "offset": 1760,
+      "count": 40
+    },
+    {
+      "name": "bid_sz_1",
+      "type": "i32",
+      "offset": 1920,
+      "count": 40
+    },
+    {
+      "name": "ask_px_1",
+      "type": "i32",
+      "offset": 2080,
+      "count": 40
+    },
+    {
+      "name": "ask_sz_1",
+      "type": "i32",
+      "offset": 2240,
+      "count": 40
+    },
+    {
+      "name": "bid_px_2",
+      "type": "i32",
+      "offset": 2400,
+      "count": 40
+    },
+    {
+      "name": "bid_sz_2",
+      "type": "i32",
+      "offset": 2560,
+      "count": 40
+    },
+    {
+      "name": "ask_px_2",
+      "type": "i32",
+      "offset": 2720,
+      "count": 40
+    },
+    {
+      "name": "ask_sz_2",
+      "type": "i32",
+      "offset": 2880,
+      "count": 40
+    },
+    {
+      "name": "bid_px_3",
+      "type": "i32",
+      "offset": 3040,
+      "count": 40
+    },
+    {
+      "name": "bid_sz_3",
+      "type": "i32",
+      "offset": 3200,
+      "count": 40
+    },
+    {
+      "name": "ask_px_3",
+      "type": "i32",
+      "offset": 3360,
+      "count": 40
+    },
+    {
+      "name": "ask_sz_3",
+      "type": "i32",
+      "offset": 3520,
+      "count": 40
+    },
+    {
+      "name": "bid_px_4",
+      "type": "i32",
+      "offset": 3680,
+      "count": 40
+    },
+    {
+      "name": "bid_sz_4",
+      "type": "i32",
+      "offset": 3840,
+      "count": 40
+    },
+    {
+      "name": "ask_px_4",
+      "type": "i32",
+      "offset": 4000,
+      "count": 40
+    },
+    {
+      "name": "ask_sz_4",
+      "type": "i32",
+      "offset": 4160,
+      "count": 40
+    },
+    {
+      "name": "bid_px_5",
+      "type": "i32",
+      "offset": 4320,
+      "count": 40
+    },
+    {
+      "name": "bid_sz_5",
+      "type": "i32",
+      "offset": 4480,
+      "count": 40
+    },
+    {
+      "name": "ask_px_5",
+      "type": "i32",
+      "offset": 4640,
+      "count": 40
+    },
+    {
+      "name": "ask_sz_5",
+      "type": "i32",
+      "offset": 4800,
+      "count": 40
+    },
+    {
+      "name": "bid_px_6",
+      "type": "i32",
+      "offset": 4960,
+      "count": 40
+    },
+    {
+      "name": "bid_sz_6",
+      "type": "i32",
+      "offset": 5120,
+      "count": 40
+    },
+    {
+      "name": "ask_px_6",
+      "type": "i32",
+      "offset": 5280,
+      "count": 40
+    },
+    {
+      "name": "ask_sz_6",
+      "type": "i32",
+      "offset": 5440,
+      "count": 40
+    },
+    {
+      "name": "bid_px_7",
+      "type": "i32",
+      "offset": 5600,
+      "count": 40
+    },
+    {
+      "name": "bid_sz_7",
+      "type": "i32",
+      "offset": 5760,
+      "count": 40
+    },
+    {
+      "name": "ask_px_7",
+      "type": "i32",
+      "offset": 5920,
+      "count": 40
+    },
+    {
+      "name": "ask_sz_7",
+      "type": "i32",
+      "offset": 6080,
+      "count": 40
+    },
+    {
+      "name": "bid_px_8",
+      "type": "i32",
+      "offset": 6240,
+      "count": 40
+    },
+    {
+      "name": "bid_sz_8",
+      "type": "i32",
+      "offset": 6400,
+      "count": 40
+    },
+    {
+      "name": "ask_px_8",
+      "type": "i32",
+      "offset": 6560,
+      "count": 40
+    },
+    {
+      "name": "ask_sz_8",
+      "type": "i32",
+      "offset": 6720,
+      "count": 40
+    },
+    {
+      "name": "bid_px_9",
+      "type": "i32",
+      "offset": 6880,
+      "count": 40
+    },
+    {
+      "name": "bid_sz_9",
+      "type": "i32",
+      "offset": 7040,
+      "count": 40
+    },
+    {
+      "name": "ask_px_9",
+      "type": "i32",
+      "offset": 7200,
+      "count": 40
+    },
+    {
+      "name": "ask_sz_9",
+      "type": "i32",
+      "offset": 7360,
+      "count": 40
+    },
+    {
+      "name": "mm_bid",
+      "type": "i32",
+      "offset": 7520,
+      "count": 40
+    },
+    {
+      "name": "mm_ask",
+      "type": "i32",
+      "offset": 7680,
+      "count": 40
+    },
+    {
+      "name": "mm_inventory",
+      "type": "i32",
+      "offset": 7840,
+      "count": 40
+    },
+    {
+      "name": "mm_cash",
+      "type": "f64",
+      "offset": 8000,
+      "count": 40
+    },
+    {
+      "name": "mm_pnl",
+      "type": "f64",
+      "offset": 8320,
+      "count": 40
+    },
+    {
+      "name": "fundamental",
+      "type": "f64",
+      "offset": 8640,
+      "count": 40
+    },
+    {
+      "name": "trade_time_ns",
+      "type": "f64",
+      "offset": 8960,
+      "count": 251
+    },
+    {
+      "name": "trade_price",
+      "type": "i32",
+      "offset": 10968,
+      "count": 251
+    },
+    {
+      "name": "trade_qty",
+      "type": "i32",
+      "offset": 11976,
+      "count": 251
+    },
+    {
+      "name": "trade_aggressor",
+      "type": "i32",
+      "offset": 12984,
+      "count": 251
+    },
+    {
+      "name": "heatmap",
+      "type": "u8",
+      "offset": 13992,
+      "count": 600
+    }
+  ],
+  "data_bytes": 14592
+}
