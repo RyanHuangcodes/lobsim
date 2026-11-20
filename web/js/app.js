@@ -1,7 +1,7 @@
 // app.js — dashboard controller. Wires loading, the shared cursor, zoom, playback,
 // keyboard, table views and the light/dark toggle across every panel.
 
-import { loadBundle, hasMM, isMissingI32, SCHEMA_VERSION } from "./bundle.js";
+import { loadBundle, hasMM, isMissingI32, colToTimeNs, SCHEMA_VERSION } from "./bundle.js";
 import { binarySearchTime, lowerBoundTime } from "./search.js";
 import { formatTime, formatPrice, formatInt, formatSigned } from "./format.js";
 import { HeatmapView, buildRampLUT, drawLegend } from "./heatmap.js";
@@ -252,6 +252,20 @@ function buildCharts() {
     priceSeries.push({ label: "MM ask", stroke: p.mm, width: 2, points: { show: true, size: 4 } });
     priceData.push(maskMissingI32(V.mm_ask));
   }
+
+  // Trades as dots. uPlot shares one x-array per chart, so each trade is snapped to the
+  // nearest ladder sample and drawn as a points-only series (no connecting line). Two
+  // series — "trade buy" and "trade sell" — reuse the existing buy/sell palette colours so
+  // no 4th series colour is introduced (the spec forbids one); the split lets uPlot colour
+  // each dot by aggressor without per-point stroke callbacks. Point size is qty-scaled with
+  // a cap and a >=8px floor, matching the heatmap trade dots.
+  const trade = buildTradeOverlaySeries(xs);
+  if (trade) {
+    priceSeries.push(tradeDotSeries("trade buy", p.buy, trade.sizeBuy));
+    priceData.push(trade.buy);
+    priceSeries.push(tradeDotSeries("trade sell", p.sell, trade.sizeSell));
+    priceData.push(trade.sell);
+  }
   state.charts.price = makeChart(el("chart-price"), priceSeries, priceData, { height: 220 });
 
   if (state.hasMM) {
@@ -268,6 +282,63 @@ function buildCharts() {
       { zeroBaseline: true }
     );
   }
+}
+
+// Build price-chart trade overlay data: two y-arrays (buy / sell) aligned to the ladder
+// x-array, plus matching per-index point-size arrays. Each trade is snapped to its nearest
+// ladder sample; collisions keep the later trade (points-only, so this only affects the
+// drawn dot, never a line). Returns null when there are no trades.
+function buildTradeOverlaySeries(xs) {
+  const V = state.views;
+  const t = V.trade_time_ns;
+  const n = t.length;
+  if (!n) return null;
+  const len = xs.length;
+  const buy = new Array(len).fill(null);
+  const sell = new Array(len).fill(null);
+  const sizeBuy = new Array(len).fill(0);
+  const sizeSell = new Array(len).fill(0);
+  const cap = state.qtyCap;
+  for (let i = 0; i < n; i++) {
+    const idx = binarySearchTime(state.times, t[i]);
+    if (idx < 0) continue;
+    const px = V.trade_price[i];
+    const sz = dotDiameter(V.trade_qty[i], cap);
+    if (V.trade_aggressor[i] === 0) {
+      buy[idx] = px;
+      sizeBuy[idx] = Math.max(sizeBuy[idx], sz);
+    } else {
+      sell[idx] = px;
+      sizeSell[idx] = Math.max(sizeSell[idx], sz);
+    }
+  }
+  return { buy, sell, sizeBuy, sizeSell };
+}
+
+// A points-only uPlot series whose per-point diameter comes from a size array (index-aligned).
+function tradeDotSeries(label, color, sizes) {
+  return {
+    label,
+    stroke: color,
+    fill: color,
+    width: 0,
+    points: {
+      show: true,
+      stroke: color,
+      fill: color,
+      size: (u, seriesIdx, i) => sizes[i] || 0,
+    },
+  };
+}
+
+// Trade-dot diameter in px: area ∝ qty with a cap and an 8px floor, mirroring
+// HeatmapView.dotRadius (min radius 4 -> 8px diameter, max radius 11 -> 22px diameter).
+function dotDiameter(qty, cap) {
+  const clamped = Math.min(qty, cap);
+  const minR = 4;
+  const maxR = 11;
+  const t = cap > 0 ? clamped / cap : 0;
+  return 2 * (minR + (maxR - minR) * Math.sqrt(t));
 }
 
 let syncingCursor = false;
@@ -584,13 +655,53 @@ function onHeatmapHover(e) {
   const hm = state.meta.heatmap;
   const tNs = hm.t0_ns + col * hm.dt_ns;
 
-  // tooltip: time, price, size at the hovered cell
   const y = e.clientY - rect.top;
-  const row = Math.floor((y / rect.height) * hm.rows);
-  const price = hm.price_hi - row;
-  const code = state.views.heatmap[Math.max(0, Math.min(hm.cols - 1, Math.round(col))) * hm.rows + Math.max(0, Math.min(hm.rows - 1, row))];
-  hv.canvas.title = `t=${formatTime(tNs - state.times[0])}  price=${formatPrice(price, state.meta.tick_display)}  size≈${codeToSizeLabel(code)}`;
+
+  // Prefer a trade-dot tooltip when the pointer is near a dot (spec wants a distinct
+  // time/price/qty/aggressor tooltip for trades); otherwise fall back to the cell tooltip.
+  const hit = nearestTradeDot(x, y, rect.width, rect.height);
+  if (hit) {
+    const buy = state.views.trade_aggressor[hit.i] === 0;
+    hv.canvas.title =
+      `trade  t=${formatTime(state.views.trade_time_ns[hit.i] - state.times[0])}` +
+      `  price=${formatPrice(state.views.trade_price[hit.i], state.meta.tick_display)}` +
+      `  qty=${formatInt(state.views.trade_qty[hit.i])}  ${buy ? "BUY" : "SELL"}`;
+  } else {
+    // tooltip: time, price, size at the hovered cell
+    const row = Math.floor((y / rect.height) * hm.rows);
+    const price = hm.price_hi - row;
+    const code = state.views.heatmap[Math.max(0, Math.min(hm.cols - 1, Math.round(col))) * hm.rows + Math.max(0, Math.min(hm.rows - 1, row))];
+    hv.canvas.title = `t=${formatTime(tNs - state.times[0])}  price=${formatPrice(price, state.meta.tick_display)}  size≈${codeToSizeLabel(code)}`;
+  }
   setCursorTime(tNs);
+}
+
+// Find the nearest trade dot to a canvas pixel (x,y), within a hit radius that follows the
+// dot's drawn size. Maps trade time/price into the same pixel space the heatmap overlay
+// uses (HeatmapView.timeToX / priceToY are canvas-backing-store coords, so scale by the
+// displayed rect). Returns {i, dist} or null. Only visible-window trades are considered.
+function nearestTradeDot(x, y, dispW, dispH) {
+  const hv = state.heatmap;
+  const V = state.views;
+  const t = V.trade_time_ns;
+  const n = t.length;
+  if (!n) return null;
+  const sx = dispW / hv.canvas.width;
+  const sy = dispH / hv.canvas.height;
+  const t0 = colToTimeNs(hv.col0, hv.meta.heatmap.t0_ns, hv.meta.heatmap.dt_ns);
+  const t1 = colToTimeNs(hv.col1 + 1, hv.meta.heatmap.t0_ns, hv.meta.heatmap.dt_ns);
+  let best = null;
+  for (let i = 0; i < n; i++) {
+    const tt = t[i];
+    if (tt < t0 || tt > t1) continue;
+    const dx = hv.timeToX(tt, hv.canvas.width) * sx - x;
+    const dy = hv.priceToY(V.trade_price[i], hv.canvas.height) * sy - y;
+    const dist = Math.hypot(dx, dy);
+    // hit radius = drawn radius (+2px slack) in displayed pixels.
+    const r = hv.dotRadius(V.trade_qty[i], state.qtyCap) * ((sx + sy) / 2) + 2;
+    if (dist <= r && (!best || dist < best.dist)) best = { i, dist };
+  }
+  return best;
 }
 
 function codeToSizeLabel(code) {
