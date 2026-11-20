@@ -1,5 +1,11 @@
 #include "lob/order_book.hpp"
 
+// Test-the-tester bugs for the fuzz canaries (LOBSIM_INJECT_BUG, upgrade 1): never in a normal build.
+#if (defined(LOBSIM_BUG_TAKER_PRICE) || defined(LOBSIM_BUG_MODIFY_KEEPS_PRIORITY) || \
+     defined(LOBSIM_BUG_FOK_IGNORES_STP)) && !defined(LOBSIM_FUZZ_BUILD)
+#error "LOBSIM_BUG_* injects a matching bug and is only allowed in a LOBSIM_FUZZ build"
+#endif
+
 #include <algorithm>
 #include <stdexcept>
 #include <string>
@@ -98,7 +104,12 @@ bool OrderBook::fok_fillable_in(const Makers& makers, const Taker& t) const {
       if (found >= t.remaining) return true;
       if (m->owner == t.owner) {
         if (t.stp == STP::CancelResting) continue;  // would be cancelled, adds nothing
+#ifdef LOBSIM_BUG_FOK_IGNORES_STP
+        found += m->remaining;  // injected bug: the dry run counts the taker's own order
+        continue;
+#else
         return false;                               // CancelTaking: the walk ends here
+#endif
       }
       found += m->remaining;
     }
@@ -134,7 +145,11 @@ OrderBook::MatchResult OrderBook::match_in(Makers& makers, Taker& t, EventBuffer
         release(m);
       } else {
         const Qty qty = std::min(t.remaining, m->remaining);
-        out.push_back(Trade{next_trade_id_++, level.price, qty, m->id, t.id, m->owner, t.owner,
+        Price trade_price = level.price;
+#ifdef LOBSIM_BUG_TAKER_PRICE
+        if (!t.is_market) trade_price = t.limit;  // injected bug: print at the taker's limit
+#endif
+        out.push_back(Trade{next_trade_id_++, trade_price, qty, m->id, t.id, m->owner, t.owner,
                             t.side});
         t.remaining -= qty;
         m->remaining -= qty;
@@ -250,7 +265,11 @@ void OrderBook::do_modify(const Modify& req, EventBuffer& out) {
     return reject(RejectReason::PostOnlyWouldCross);
 
   // Same price, smaller qty: reduce in place, keep priority.
+#ifdef LOBSIM_BUG_MODIFY_KEEPS_PRIORITY
+  if (req.new_price == o->price) {  // injected bug: an increase keeps its place too
+#else
   if (req.new_price == o->price && req.new_qty < o->remaining) {
+#endif
     o->level->total_qty -= o->remaining - req.new_qty;
     o->remaining = req.new_qty;
     out.push_back(Modified{o->id, o->owner, o->price, req.new_qty, true});

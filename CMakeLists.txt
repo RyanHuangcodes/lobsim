@@ -41,6 +41,19 @@ if(LOBSIM_FUZZ)
   add_compile_definitions(LOBSIM_FUZZ_BUILD=1)
 endif()
 
+# One injected OrderBook bug for the fuzz canaries (src/lob/order_book.cpp). Anything but a known
+# name, or any name without LOBSIM_FUZZ, stops here: a typo must never build a bug-free canary.
+set(LOBSIM_INJECT_BUG "" CACHE STRING "Fuzz canary: LOBSIM_BUG_TAKER_PRICE, LOBSIM_BUG_MODIFY_KEEPS_PRIORITY or LOBSIM_BUG_FOK_IGNORES_STP")
+if(NOT LOBSIM_INJECT_BUG STREQUAL "")
+  if(NOT LOBSIM_INJECT_BUG MATCHES "^(LOBSIM_BUG_TAKER_PRICE|LOBSIM_BUG_MODIFY_KEEPS_PRIORITY|LOBSIM_BUG_FOK_IGNORES_STP)$")
+    message(FATAL_ERROR "LOBSIM_INJECT_BUG='${LOBSIM_INJECT_BUG}' is not one of LOBSIM_BUG_TAKER_PRICE, LOBSIM_BUG_MODIFY_KEEPS_PRIORITY, LOBSIM_BUG_FOK_IGNORES_STP")
+  endif()
+  if(NOT LOBSIM_FUZZ)
+    message(FATAL_ERROR "LOBSIM_INJECT_BUG needs -DLOBSIM_FUZZ=ON: an injected bug is only allowed in a fuzz build")
+  endif()
+  add_compile_definitions(${LOBSIM_INJECT_BUG}=1)
+endif()
+
 # Warnings apply to our targets only, through this interface target.
 add_library(lobsim_options INTERFACE)
 target_compile_options(lobsim_options INTERFACE -Wall -Wextra -Wpedantic)
