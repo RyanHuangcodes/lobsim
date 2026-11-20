@@ -77,6 +77,16 @@ jobs:
           -DLOBSIM_FUZZ=ON
       - name: Build
         run: cmake --build build-fuzz -j "$(nproc)"
+      - name: Check that the engine and the parser are instrumented
+        run: |
+          for lib in build-fuzz/liblob.a build-fuzz/liborderlog.a; do
+            n=$(nm "$lib" | grep -c __sanitizer_cov || true)
+            echo "$lib: $n __sanitizer_cov references"
+            if [ "$n" -eq 0 ]; then
+              echo "FAIL: $lib has no fuzzer instrumentation"
+              exit 1
+            fi
+          done
       - name: Fuzz diff (60 s)
         run: |
           mkdir -p fuzz-work/diff fuzz-artifacts
@@ -121,6 +131,16 @@ jobs:
           -DLOBSIM_INJECT_BUG=${{ matrix.bug }}
       - name: Build
         run: cmake --build build-fuzz -j "$(nproc)"
+      - name: Check that the engine and the parser are instrumented
+        run: |
+          for lib in build-fuzz/liblob.a build-fuzz/liborderlog.a; do
+            n=$(nm "$lib" | grep -c __sanitizer_cov || true)
+            echo "$lib: $n __sanitizer_cov references"
+            if [ "$n" -eq 0 ]; then
+              echo "FAIL: $lib has no fuzzer instrumentation"
+              exit 1
+            fi
+          done
       - name: Fuzz must find the injected bug
         run: |
           mkdir -p fuzz-work/diff fuzz-artifacts
@@ -142,12 +162,40 @@ jobs:
             echo "FAIL: ${{ matrix.bug }} not detected (exit code $rc, ${elapsed}s, no crash file)"
             exit 1
           fi
+      - name: Fuzz must find the injected bug without seeds
+        run: |
+          mkdir -p fuzz-work-unseeded fuzz-empty fuzz-artifacts-unseeded
+          start=$SECONDS
+          set +e
+          ./build-fuzz/fuzz/fuzz_diff fuzz-work-unseeded fuzz-empty \
+            -max_len=4096 -max_total_time=120 -timeout=10 \
+            -artifact_prefix=fuzz-artifacts-unseeded/ -print_final_stats=1
+          rc=$?
+          set -e
+          elapsed=$((SECONDS - start))
+          crash=""
+          for f in fuzz-artifacts-unseeded/crash-*; do
+            if [ -e "$f" ]; then crash=$f; break; fi
+          done
+          if [ "$rc" -ne 0 ] && [ -n "$crash" ]; then
+            echo "PASS (unseeded): ${{ matrix.bug }} found after ${elapsed}s, crash file: $(basename "$crash")"
+          else
+            echo "FAIL (unseeded): ${{ matrix.bug }} not detected (exit code $rc, ${elapsed}s, no crash file)"
+            exit 1
+          fi
       - name: Upload crash artifacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: fuzz-canary-${{ matrix.bug }}
           path: fuzz-artifacts/
+          if-no-files-found: ignore
+      - name: Upload unseeded crash artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-canary-unseeded-${{ matrix.bug }}
+          path: fuzz-artifacts-unseeded/
           if-no-files-found: ignore
 
   coverage:

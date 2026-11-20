@@ -206,6 +206,8 @@ target_link_libraries(fuzz_regression_tests PRIVATE fuzz_driver lobsim_options G
 target_compile_definitions(fuzz_regression_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME fuzz_regressions_diff COMMAND fuzz_regression_tests --gtest_filter=Diff/*)
 add_test(NAME fuzz_regressions_replay_parse COMMAND fuzz_regression_tests --gtest_filter=ReplayParse/*)
+# A gtest filter that matches nothing exits 0; this one fails if the seeds are not found.
+add_test(NAME fuzz_regressions_corpus_found COMMAND fuzz_regression_tests --gtest_filter=FuzzCorpus.*)
 
 # The committed seeds must equal the output of fuzz/make_seeds.py.
 find_package(Python3 COMPONENTS Interpreter)

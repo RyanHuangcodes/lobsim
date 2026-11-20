@@ -25,6 +25,13 @@ TEST(FuzzReplayParse, EverySeedReturns) {
     std::ifstream in(e.path(), std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     run(text);
+    // A format change must not turn the seeds into rejection-only inputs: the run_seed logs
+    // parse, and only the empty file is rejected.
+    if (e.path().filename() == "empty.log") {
+      EXPECT_THROW(sim::parse_order_log(text), sim::ReplayError);
+    } else {
+      EXPECT_NO_THROW(sim::parse_order_log(text)) << e.path();
+    }
     ++files;
   }
   EXPECT_GE(files, 4);

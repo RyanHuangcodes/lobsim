@@ -74,6 +74,30 @@ std::vector<std::uint8_t> read_bytes(const std::string& path) {
   return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 }
 
+// The two suites below are filtered by name in ctest, and a gtest filter that matches nothing
+// exits 0. These checks fail if the committed seeds are not found (a wrong source directory,
+// a renamed suite), so the regression tests can never pass by running nothing.
+bool has_file(const std::vector<Case>& cases, const std::string& file_name) {
+  return std::any_of(cases.begin(), cases.end(),
+                     [&](const Case& c) { return fs::path(c.path).filename().string() == file_name; });
+}
+
+TEST(FuzzCorpus, CommittedSeedsAreFound) {
+  const std::vector<Case> diff = collect_cases("diff");
+  for (const char* name :
+       {"worked_example", "trade_at_maker_price", "fifo_one_level", "ioc_remainder", "market_empty_side",
+        "fok_exact_fill", "fok_one_lot_short", "post_only_reject", "modify_reduce_keeps_priority",
+        "modify_increase_loses_priority", "modify_to_crossing_price", "cancel_unknown_id", "cancel_wrong_owner",
+        "stp_cancel_taking", "stp_cancel_resting", "fok_stp_cancel_taking", "fok_stp_cancel_resting",
+        "every_reject_reason", "mixed_stream_64"}) {
+    EXPECT_TRUE(has_file(diff, std::string(name) + ".bin")) << "missing diff seed " << name << ".bin";
+  }
+  const std::vector<Case> replay = collect_cases("replay_parse");
+  for (const char* name : {"empty.log", "run_seed1.log", "run_seed2.log", "run_seed3.log"}) {
+    EXPECT_TRUE(has_file(replay, name)) << "missing replay_parse seed " << name;
+  }
+}
+
 class DiffRegression : public ::testing::TestWithParam<Case> {};
 
 TEST_P(DiffRegression, BooksAgree) {

@@ -191,7 +191,9 @@ when the test runs, so a new file needs neither a rebuild nor a reconfigure; for
 tests are registered with plain `add_test` (`fuzz_regressions_diff`, `fuzz_regressions_replay_parse`)
 and not with `gtest_discover_tests`, whose list is fixed at build time and would silently skip a new
 file. A failing file aborts the process; the file's path is printed first, so ctest's output names
-it. Empty directories (a `.gitkeep` only) pass.
+it. Empty directories (a `.gitkeep` only) pass. Because a gtest filter that matches nothing also
+exits 0, a third ctest entry, `fuzz_regressions_corpus_found`, fails unless the 19 named seeds of
+`fuzz/corpus/diff` and the 4 seeds of `fuzz/corpus/replay_parse` are found.
 
 ## What CI runs
 
@@ -200,11 +202,15 @@ it. Empty directories (a `.gitkeep` only) pass.
 - `build-test`: GCC 14 and Clang 18, Debug and Release, with `-DLOBSIM_WERROR=ON`, build and `ctest`
   (this includes the seeded differential test, the corpus regression tests and `fuzz_seeds_up_to_date`).
 - `sanitize`: Clang 18 with `-DLOBSIM_SANITIZE=ON` and `ctest`.
-- `fuzz-smoke`: the fuzz build with Clang 18, then `fuzz_diff` and `fuzz_replay_parse` for 60 seconds
-  each against the committed corpora. Crash files are uploaded on failure.
-- `fuzz-canary`: one job per injected bug (below). The fuzzer runs for up to 300 seconds, and the job
-  passes only if it exits non-zero and a `fuzz-artifacts/crash-*` file exists: a fuzzer that stopped
-  catching bugs fails CI.
+- `fuzz-smoke`: the fuzz build with Clang 18, a check that `liblob.a` and `liborderlog.a` contain
+  `__sanitizer_cov` symbols (an engine without instrumentation would give the fuzzer no feedback),
+  then `fuzz_diff` and `fuzz_replay_parse` for 60 seconds each against the committed corpora. Crash
+  files are uploaded on failure.
+- `fuzz-canary`: one job per injected bug (below), with the same instrumentation check. The fuzzer
+  runs for up to 300 seconds from the committed corpus, and then for up to 120 seconds from an empty
+  corpus, so the result does not depend on a seed that triggers the bug by itself. Each run passes
+  only if the fuzzer exits non-zero and a `crash-*` file exists: a fuzzer that stopped catching bugs
+  fails CI.
 - `coverage`: a Clang 18 source-based coverage build running every ctest test (so the regression
   tests and the seeds count), with the line coverage of `src/lob` in the job log and an HTML report as
   an artifact.
