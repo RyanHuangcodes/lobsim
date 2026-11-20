@@ -414,6 +414,56 @@ TEST(MatchingMerge, TwoRealOrdersAtOnePriceAreNeverMerged) {
   }
 }
 
+TEST(MatchingMerge, TwoAggressorsAtOneInstantSplittingOneRealOrderAreOneFill) {
+  // Found in the synthetic fake day: two buy orders of 6 and 4 lots arrive at the same nanosecond.
+  // The first takes order 5 (2) and 4 of order 6 (5); the second takes the last 1 of order 6 and 3
+  // of order 7. The burst rule reads the four executions as one aggressive order of 10, which fills
+  // 5 2, 6 5, 7 3: order 6 in one piece. Compared one by one the data's "6 4" would be a size split.
+  const std::string head = "34200.000000001,1,1,10,90,1\n"
+                           "34200.000000002,1,5,2,100,-1\n"
+                           "34200.000000003,1,6,5,100,-1\n"
+                           "34200.000000004,1,7,3,100,-1\n";
+  const std::string rows = row3("", "90,10") + row3("100,2", "90,10") + row3("100,7", "90,10") +
+                           row3("100,10", "90,10");
+  const replay::Summary s = run_text(head +
+                                         "34200.000000005,4,5,2,100,-1\n"
+                                         "34200.000000005,4,6,4,100,-1\n"
+                                         "34200.000000005,4,6,1,100,-1\n"
+                                         "34200.000000005,4,7,3,100,-1\n",
+                                     rows + row3("100,8", "90,10") + row3("100,4", "90,10") +
+                                         row3("100,3", "90,10") + row3("", "90,10"),
+                                     3);
+  EXPECT_EQ(s.matching.bursts, 1u);
+  EXPECT_EQ(s.matching.burst_messages, 4u);
+  const replay::MatchCounts& c = at_depth(s, 3);
+  EXPECT_EQ(c.exact, 1u);
+  EXPECT_EQ(c.size_split, 0u);
+  EXPECT_EQ(c.agree(), 1u);
+  EXPECT_EQ(c.scored(), 1u);
+}
+
+TEST(MatchingMerge, FillsOfOneRealOrderAreMergedOnlyWhenConsecutive) {
+  // Order 6 is named again after order 7: no aggressive order can do that (after 7 it never comes
+  // back to 6, which is ahead of 7), so nothing is merged and the burst is a mismatch.
+  const std::string head = "34200.000000001,1,1,10,90,1\n"
+                           "34200.000000002,1,6,5,100,-1\n"
+                           "34200.000000003,1,7,3,100,-1\n";
+  const std::string rows = row3("", "90,10") + row3("100,5", "90,10") + row3("100,8", "90,10");
+  const replay::Summary s = run_text(head +
+                                         "34200.000000004,4,6,4,100,-1\n"
+                                         "34200.000000004,4,7,3,100,-1\n"
+                                         "34200.000000004,4,6,1,100,-1\n",
+                                     rows + row3("100,4", "90,10") + row3("100,1", "90,10") + row3("", "90,10"), 3);
+  const replay::MatchCounts& c = at_depth(s, 3);
+  EXPECT_EQ(c.agree(), 0u);
+  EXPECT_EQ(c.scored(), 1u);
+  EXPECT_EQ(c.size_split, 1u);  // first difference: order 6, 4 in the data, 5 predicted
+  ASSERT_EQ(s.matching.size_split_examples.size(), 1u);
+  EXPECT_EQ(s.matching.size_split_examples[0].data,
+            (std::vector<std::string>{"6 4 @ 100", "7 3 @ 100", "6 1 @ 100"}));
+  EXPECT_EQ(s.matching.size_split_examples[0].predicted, (std::vector<std::string>{"6 5 @ 100", "7 3 @ 100"}));
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------- hostile input

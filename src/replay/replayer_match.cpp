@@ -109,6 +109,7 @@ void Replayer::check_burst(const Entry& first, Source& source) {
   std::unordered_map<lob::OrderId, lob::Qty> taken;
   std::vector<BurstFill> data;
   lob::OrderId last_synthetic = 0;  // the synthetic order the last data fill is attributed to; 0 when it is not
+  lob::OrderId last_known = 0;      // the known order the last data fill is against; 0 when it is not
   bool unknown = false;  // also set when a size sum does not fit in 64 bits: the burst cannot be predicted
   std::set<std::int64_t> prices;
   lob::Qty qty = 0;
@@ -126,18 +127,27 @@ void Replayer::check_burst(const Entry& first, Source& source) {
             __builtin_add_overflow(taken[o->id], m.size, &taken[o->id])) {
           unknown = true;
         }
-        data.push_back(BurstFill{false, m.order_id, m.price, m.size});
+        // Two consecutive fills of one known order: two aggressive orders at the same instant (the
+        // first stopped inside this order, the next went on from there) that the burst rule reads as
+        // one. A single aggressive order fills a resting order in one piece, so they are one fill.
+        if (last_known == o->id && data.back().external_id == m.order_id && data.back().price == m.price) {
+          if (__builtin_add_overflow(data.back().size, m.size, &data.back().size)) unknown = true;
+        } else {
+          data.push_back(BurstFill{false, m.order_id, m.price, m.size});
+        }
         last_synthetic = 0;
+        last_known = o->id;
         continue;
       }
     }
+    last_known = 0;
     bool attributed = false;
     for (const lob::OrderView& o : book_.level_orders(resting, m.price)) {
       if (synthetic_.count(o.id) == 0 || o.remaining - taken[o.id] < m.size) continue;
       if (__builtin_add_overflow(taken[o.id], m.size, &taken[o.id])) unknown = true;
       // Consecutive messages attributed to the same synthetic order are one fill of that order:
       // the data cannot say how a seeded quantity was split, the engine fills it in one piece
-      // (never merged for real orders: their ids are known).
+      // (fills of different real orders are never merged: their ids are known).
       if (last_synthetic == o.id) {
         data.back().size += m.size;  // fits: the sum was checked against `taken` just above
       } else {
