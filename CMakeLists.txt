@@ -5,18 +5,40 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(LOBSIM_SANITIZE "Build with AddressSanitizer and UBSan" OFF)
+option(LOBSIM_FUZZ "Build libFuzzer targets" OFF)
+
+# A fuzz build defaults to Debug: NDEBUG stays off, so the engine's own validate() calls run.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+  if(LOBSIM_FUZZ)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+  else()
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+  endif()
 endif()
 
-option(LOBSIM_SANITIZE "Build with AddressSanitizer and UBSan" OFF)
 option(LOBSIM_WERROR "Treat warnings in our own targets as errors" ON)
 
 # Global, and before the dependencies are fetched, so they are instrumented too.
 if(LOBSIM_SANITIZE)
-  set(_lobsim_san -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer)
+  set(_lobsim_san -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
   add_compile_options(${_lobsim_san})
   add_link_options(${_lobsim_san})
+endif()
+
+# libFuzzer build: its own build directory (build-fuzz/), only lob, the driver and the fuzz
+# executables. The engine and the driver are instrumented; nothing instrumented is linked
+# into a non-fuzzer executable.
+if(LOBSIM_FUZZ)
+  if(LOBSIM_SANITIZE)
+    message(FATAL_ERROR "LOBSIM_FUZZ and LOBSIM_SANITIZE are mutually exclusive: a fuzz build already includes AddressSanitizer and UBSan")
+  endif()
+  if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    message(FATAL_ERROR "LOBSIM_FUZZ needs LLVM Clang with libFuzzer (found ${CMAKE_CXX_COMPILER_ID}); use LLVM clang++, on macOS $(brew --prefix llvm)/bin/clang++")
+  endif()
+  add_compile_options(-fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=all
+    -g -O1 -fno-omit-frame-pointer)
+  add_compile_definitions(LOBSIM_FUZZ_BUILD=1)
 endif()
 
 # Warnings apply to our targets only, through this interface target.
@@ -26,6 +48,7 @@ if(LOBSIM_WERROR)
   target_compile_options(lobsim_options INTERFACE -Werror)
 endif()
 
+if(NOT LOBSIM_FUZZ)
 include(FetchContent)
 set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
@@ -65,6 +88,7 @@ foreach(_t gtest gtest_main gmock benchmark nlohmann_json)
     endif()
   endif()
 endforeach()
+endif()
 
 add_library(lob STATIC src/lob/order_book.cpp src/lob/reference_book.cpp)
 target_include_directories(lob PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -73,6 +97,10 @@ target_link_libraries(lob PRIVATE lobsim_options)
 
 # Shared differential driver and the crash-file decoder (upgrade 1).
 add_subdirectory(fuzz)
+
+if(LOBSIM_FUZZ)
+  return()
+endif()
 
 # The simulator. It depends on lob; lob does not depend on it.
 add_library(sim STATIC
