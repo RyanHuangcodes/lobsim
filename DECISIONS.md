@@ -148,3 +148,19 @@ One line per decision, with the reason. Section numbers refer to `SPEC.md`.
   stat::slowest_unit_time_sec:    0
   stat::peak_rss_mb:              256
   ```
+
+## Fuzzing the orders.log parser (upgrade 1, F5)
+- D-141 `src/sim/order_log.cpp` and `src/sim/replay.cpp` moved from `sim` into a static library `orderlog` (links `lob` publicly; their headers stay in `include/sim`). They include only `lob` and standard headers, not nlohmann_json or any other simulator source, so the fuzz build, which configures only `lob`, the fuzz driver and the fuzz executables, can compile and instrument them. `sim` links `orderlog` publicly, so every existing target still sees the codec and the replay; `orderlog` is defined right after `lob` and before `add_subdirectory(fuzz)`.
+- D-142 `run_replay_parse(data, size)` (in `fuzz_driver`, shared by `fuzz_replay_parse` and the regression test) treats the bytes as the text of an `orders.log`. Only `sim::ReplayError` from the first `parse_order_log` is a clean rejection; `bad_alloc`, `length_error`, `logic_error` or any other exception is not caught and is a crash, as is a sanitizer report. If the text parses, it is formatted and parsed again: that second parse must not throw (the codec's own output must be accepted), must equal the first (`OrderLog ==`) and must format to the same text. Any failure prints a short report (the ReplayError text, or the first differing request) and aborts. No output on success, no global state.
+- D-143 Seeds in `fuzz/corpus/replay_parse/`: `empty.log` and `run_seed1.log` to `run_seed3.log`, each of the latter the first lines (cut at a line boundary, under 4 KB, with N, C and M lines) of the `orders.log` of `lobsim_run --config configs/default.json --seed N --duration-s 10`; the exact commands are in `fuzz/corpus/README.md`. A second suite `ReplayParse` of `fuzz_regression_tests` runs `fuzz/regressions/replay_parse/` and then this directory through `run_replay_parse` (ctest `fuzz_regressions_replay_parse`), with the same listing and naming rules as D-120.
+- D-144 First 5-minute run of `fuzz_replay_parse` (exact command of SPEC upgrade 1, 5.3, macOS, Homebrew LLVM clang, Debug fuzz build), started from the 4 seeds: no crash, `fuzz-artifacts/` empty:
+  ```
+  #4	INITED cov: 313 ft: 406 corp: 3/11921b exec/s: 0 rss: 44Mb
+  #10367465	DONE   cov: 493 ft: 2078 corp: 199/65Kb lim: 4096 exec/s: 34443 rss: 517Mb
+  Done 10367465 runs in 301 second(s)
+  stat::number_of_executed_units: 10367465
+  stat::average_exec_per_sec:     34443
+  stat::new_units_added:          3003
+  stat::slowest_unit_time_sec:    0
+  stat::peak_rss_mb:              517
+  ```

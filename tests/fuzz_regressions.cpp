@@ -1,6 +1,7 @@
-// Regression test (upgrade 1, 3.4): every regular file of fuzz/regressions/diff/ and then of
-// fuzz/corpus/diff/ is run through run_diff. run_diff aborts on a mismatch, so a failing file
-// ends the process; the path is printed to stderr first so ctest's output names it.
+// Regression tests (upgrade 1, 3.4, 7): every regular file of fuzz/regressions/<kind>/ and then of
+// fuzz/corpus/<kind>/ is run through run_diff (kind diff) or run_replay_parse (kind replay_parse).
+// Both abort on a failure, so a failing file ends the process; the path is printed to stderr
+// first so ctest's output names it.
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -15,6 +16,7 @@
 #include <vector>
 
 #include "diff_driver.hpp"
+#include "replay_parse_driver.hpp"
 
 namespace {
 
@@ -86,6 +88,21 @@ TEST_P(DiffRegression, BooksAgree) {
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(DiffRegression);
 
 INSTANTIATE_TEST_SUITE_P(Diff, DiffRegression, ::testing::ValuesIn(collect_cases("diff")),
+                         [](const ::testing::TestParamInfo<Case>& info) { return info.param.name; });
+
+class ReplayParseRegression : public ::testing::TestWithParam<Case> {};
+
+TEST_P(ReplayParseRegression, ParsesOrRejectsCleanlyAndRoundTrips) {
+  const Case& c = GetParam();
+  std::fprintf(stderr, "run_replay_parse: %s\n", c.path.c_str());
+  std::fflush(stderr);
+  const std::vector<std::uint8_t> bytes = read_bytes(c.path);
+  lob::fuzz::run_replay_parse(bytes.data(), bytes.size());
+}
+
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(ReplayParseRegression);
+
+INSTANTIATE_TEST_SUITE_P(ReplayParse, ReplayParseRegression, ::testing::ValuesIn(collect_cases("replay_parse")),
                          [](const ::testing::TestParamInfo<Case>& info) { return info.param.name; });
 
 }  // namespace

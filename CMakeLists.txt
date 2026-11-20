@@ -108,6 +108,10 @@ target_include_directories(lob PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(lob PUBLIC cxx_std_20)
 target_link_libraries(lob PRIVATE lobsim_options)
 
+# The orders.log codec and the replay: they need only lob, so the fuzz build compiles them too.
+add_library(orderlog STATIC src/sim/order_log.cpp src/sim/replay.cpp)
+target_link_libraries(orderlog PUBLIC lob PRIVATE lobsim_options)
+
 # Shared differential driver and the crash-file decoder (upgrade 1).
 add_subdirectory(fuzz)
 
@@ -123,10 +127,8 @@ add_library(sim STATIC
   src/sim/informed_trader.cpp
   src/sim/metrics.cpp
   src/sim/noise_trader.cpp
-  src/sim/order_log.cpp
-  src/sim/replay.cpp
   src/sim/simulator.cpp)
-target_link_libraries(sim PUBLIC lob nlohmann_json::nlohmann_json PRIVATE lobsim_options)
+target_link_libraries(sim PUBLIC lob orderlog nlohmann_json::nlohmann_json PRIVATE lobsim_options)
 # No fused multiply-add: floating-point results must not depend on the build type. PUBLIC,
 # because the generators and the fundamental value are inline in headers and are compiled
 # into whatever uses them.
@@ -203,6 +205,7 @@ add_executable(fuzz_regression_tests tests/fuzz_regressions.cpp)
 target_link_libraries(fuzz_regression_tests PRIVATE fuzz_driver lobsim_options GTest::gtest_main)
 target_compile_definitions(fuzz_regression_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME fuzz_regressions_diff COMMAND fuzz_regression_tests --gtest_filter=Diff/*)
+add_test(NAME fuzz_regressions_replay_parse COMMAND fuzz_regression_tests --gtest_filter=ReplayParse/*)
 
 # The committed seeds must equal the output of fuzz/make_seeds.py.
 find_package(Python3 COMPONENTS Interpreter)
@@ -213,8 +216,9 @@ if(Python3_Interpreter_FOUND)
 endif()
 
 # Decoder unit tests (upgrade 1, 3.1).
-add_executable(fuzz_decode_tests tests/unit/fuzz_decode_test.cpp)
+add_executable(fuzz_decode_tests tests/unit/fuzz_decode_test.cpp tests/unit/fuzz_replay_parse_test.cpp)
 target_link_libraries(fuzz_decode_tests PRIVATE fuzz_driver lobsim_options GTest::gtest_main)
+target_compile_definitions(fuzz_decode_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 gtest_discover_tests(fuzz_decode_tests)
 
 # Benchmarks (SPEC 7). Meaningful only in the release preset; the debug and sanitize
