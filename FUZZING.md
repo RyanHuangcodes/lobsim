@@ -52,9 +52,17 @@ formatted again with `sim::format_order_log` and parsed a second time: the secon
 throw, must equal the first, and must format to the same text. This is the double round trip: the
 codec's own output must always be accepted and must not change.
 
-Both fuzz builds are compiled with AddressSanitizer and UndefinedBehaviorSanitizer and
+**`fuzz_lobster_parse`: the LOBSTER line parsers.** The input is split on newlines and every line is
+tried as a message line (`replay::parse_message_line`) and as an orderbook line
+(`replay::parse_book_line`); a rejection is a clean result and nothing is printed. A message line that
+parses is formatted with `replay::format_message_line` and parsed again: the second parse must succeed,
+must equal the first and must not report a truncated time. An orderbook line is parsed with
+`L` = columns / 4 when the column count is a positive multiple of 4, else 10, and a row that parses must
+have `L` asks and `L` bids. A crash, a hang or a sanitizer report is a failure, as above.
+
+All three fuzz builds are compiled with AddressSanitizer and UndefinedBehaviorSanitizer and
 `-fno-sanitize-recover=all`, so a memory error or undefined behaviour in the engine or the parser
-is a crash as well. The engine and the parser are instrumented, not only the harness, otherwise
+is a crash as well. The engine and the parsers are instrumented, not only the harness, otherwise
 libFuzzer would get no coverage feedback from them.
 
 ## The input format of `fuzz_diff`
@@ -113,8 +121,8 @@ validation paths (`InvalidQty`, `InvalidPrice`, `WouldCross`, `Oversized`, `Unkn
 ## Building
 
 The fuzz targets need Clang with libFuzzer (GCC does not support `-fsanitize=fuzzer`). They are built
-in a build directory of their own, `build-fuzz/`, which configures only the `lob` and `orderlog`
-libraries, the drivers and the three fuzz executables: no tests, apps or benchmarks, so no instrumented
+in a build directory of their own, `build-fuzz/`, which configures only the `lob`, `orderlog` and `replay`
+libraries, the drivers and the four fuzz executables: no tests, apps or benchmarks, so no instrumented
 object is ever linked into a non-fuzzer executable. `LOBSIM_FUZZ` cannot be combined with
 `LOBSIM_SANITIZE` (a fuzz build already includes ASan and UBSan), and CMake stops with a message if the
 compiler is not LLVM Clang.
@@ -139,10 +147,15 @@ cmake --build build-fuzz -j
 ```
 
 Plain Homebrew `clang++` linked the fuzzers without errors: no `lld` and no libc++ library-path flag
-were needed (D-131).
+were needed (D-131). One exception so far: Apple's linker once rejected an instrumented object of the
+`replay` library with `invalid r_symbolnum` (Homebrew LLVM 23, Apple ld 1167.5), which depended on the
+size and shape of the translation unit; splitting `src/replay/lobster.cpp` into two files made it link
+(D-158). If that error comes back, the documented fallback is Homebrew's linker: `brew install lld`,
+then add `-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld` to the configure line (not needed so far, so not
+yet tried here).
 
-The executables are `build-fuzz/fuzz/fuzz_diff`, `build-fuzz/fuzz/fuzz_diff_builder` and
-`build-fuzz/fuzz/fuzz_replay_parse`. The fuzz
+The executables are `build-fuzz/fuzz/fuzz_diff`, `build-fuzz/fuzz/fuzz_diff_builder`,
+`build-fuzz/fuzz/fuzz_replay_parse` and `build-fuzz/fuzz/fuzz_lobster_parse`. The fuzz
 build defaults to Debug, so `NDEBUG` is off and the engine's own `validate()` calls run on every
 request. `lobsim_fuzz_decode` is built by the normal build (for example `build/debug/fuzz/lobsim_fuzz_decode`).
 
@@ -219,18 +232,20 @@ named after the scenario (`fok_one_lot_short.bin`, `stp_cancel_resting.bin`, ...
 `python3 fuzz/make_seeds.py`. The ctest test `fuzz_seeds_up_to_date` runs
 `make_seeds.py --check fuzz/corpus/diff --check-builder fuzz/corpus/diff_builder` and fails if a generated seed is missing or differs; extra
 files (hash-named inputs from a merge) are ignored. `fuzz/corpus/README.md` also records how the
-`replay_parse` seeds were made.
+`replay_parse` seeds were made. `fuzz/corpus/lobster_parse/` is hand-written: 20 valid message lines, 20
+valid orderbook lines (L = 10, 5 and 1, with empty levels) and a few malformed and CRLF lines.
 
 `fuzz_regression_tests` runs every regular file of `fuzz/regressions/<target>/` and then of
 `fuzz/corpus/<target>/` through the same driver function the fuzzer uses (`run_diff`,
-`run_diff_builder`, `run_replay_parse`), one test case per file, in any compiler and with no libFuzzer. The files are listed
+`run_diff_builder`, `run_replay_parse`, `run_lobster_parse`), one test case per file, in any compiler and with no libFuzzer. The files are listed
 when the test runs, so a new file needs neither a rebuild nor a reconfigure; for that reason the
-tests are registered with plain `add_test` (`fuzz_regressions_diff`, `fuzz_regressions_diff_builder`, `fuzz_regressions_replay_parse`)
-and not with `gtest_discover_tests`, whose list is fixed at build time and would silently skip a new
+tests are registered with plain `add_test` (`fuzz_regressions_diff`, `fuzz_regressions_diff_builder`, `fuzz_regressions_replay_parse`,
+`fuzz_regressions_lobster_parse`) and not with `gtest_discover_tests`, whose list is fixed at build time and would silently skip a new
 file. A failing file aborts the process; the file's path is printed first, so ctest's output names
 it. Empty directories (a `.gitkeep` only) pass. Because a gtest filter that matches nothing also
 exits 0, a further ctest entry, `fuzz_regressions_corpus_found`, fails unless the 19 named seeds of
-`fuzz/corpus/diff`, the 11 of `fuzz/corpus/diff_builder` and the 4 seeds of `fuzz/corpus/replay_parse` are found.
+`fuzz/corpus/diff`, the 11 of `fuzz/corpus/diff_builder`, the 4 seeds of `fuzz/corpus/replay_parse` and the 8 files of
+`fuzz/corpus/lobster_parse` are found.
 
 ## What CI runs
 
@@ -239,9 +254,9 @@ exits 0, a further ctest entry, `fuzz_regressions_corpus_found`, fails unless th
 - `build-test`: GCC 14 and Clang 18, Debug and Release, with `-DLOBSIM_WERROR=ON`, build and `ctest`
   (this includes the seeded differential test, the corpus regression tests and `fuzz_seeds_up_to_date`).
 - `sanitize`: Clang 18 with `-DLOBSIM_SANITIZE=ON` and `ctest`.
-- `fuzz-smoke`: the fuzz build with Clang 18, a check that `liblob.a` and `liborderlog.a` contain
+- `fuzz-smoke`: the fuzz build with Clang 18, a check that `liblob.a`, `liborderlog.a` and `libreplay.a` contain
   `__sanitizer_cov` symbols (an engine without instrumentation would give the fuzzer no feedback),
-  then `fuzz_diff`, `fuzz_diff_builder` and `fuzz_replay_parse` for 60 seconds each against the committed corpora. Crash
+  then `fuzz_diff`, `fuzz_diff_builder`, `fuzz_replay_parse` and `fuzz_lobster_parse` for 60 seconds each against the committed corpora. Crash
   files are uploaded on failure.
 - `fuzz-canary`: one job per injected bug (below), with the same instrumentation check. The fuzzer
   runs for up to 300 seconds from the committed corpus, and then for up to 120 seconds from an empty
@@ -284,6 +299,7 @@ Homebrew LLVM clang, Debug fuzz build. None found a crash.
 | `fuzz_diff` (D-140) | 507,551 in 301 s | 1,686 (measured while other fuzz runs shared the CPU; a 60 s run alone did about 5,900) | 860 to 1302 | 19 to 1487 inputs |
 | `fuzz_diff_builder` (D-157) | 505,298 in 301 s | 1,678 | 1237 to 2042 | 11 to 2009 inputs |
 | `fuzz_replay_parse` (D-144) | 10,367,465 in 301 s | 34,443 | 313 to 493 | 3 to 199 inputs |
+| `fuzz_lobster_parse` (D-167) | 2,363,409 in 301 s | 7,851 (CPU shared with other builds) | 345 to 423 | 8 to 460 inputs |
 
 ## Injected-bug canaries
 

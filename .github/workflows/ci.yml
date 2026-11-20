@@ -79,7 +79,7 @@ jobs:
         run: cmake --build build-fuzz -j "$(nproc)"
       - name: Check that the engine and the parser are instrumented
         run: |
-          for lib in build-fuzz/liblob.a build-fuzz/liborderlog.a; do
+          for lib in build-fuzz/liblob.a build-fuzz/liborderlog.a build-fuzz/libreplay.a; do
             n=$(nm "$lib" | grep -c __sanitizer_cov || true)
             echo "$lib: $n __sanitizer_cov references"
             if [ "$n" -eq 0 ]; then
@@ -103,6 +103,12 @@ jobs:
         run: |
           mkdir -p fuzz-work/replay_parse fuzz-artifacts
           ./build-fuzz/fuzz/fuzz_replay_parse fuzz-work/replay_parse fuzz/corpus/replay_parse \
+            -max_len=4096 -max_total_time=60 -timeout=10 \
+            -artifact_prefix=fuzz-artifacts/ -print_final_stats=1
+      - name: Fuzz LOBSTER parsers (60 s)
+        run: |
+          mkdir -p fuzz-work/lobster_parse fuzz-artifacts
+          ./build-fuzz/fuzz/fuzz_lobster_parse fuzz-work/lobster_parse fuzz/corpus/lobster_parse \
             -max_len=4096 -max_total_time=60 -timeout=10 \
             -artifact_prefix=fuzz-artifacts/ -print_final_stats=1
       - name: Upload crash artifacts

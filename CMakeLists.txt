@@ -112,6 +112,10 @@ target_link_libraries(lob PRIVATE lobsim_options)
 add_library(orderlog STATIC src/sim/order_log.cpp src/sim/replay.cpp)
 target_link_libraries(orderlog PUBLIC lob PRIVATE lobsim_options)
 
+# The LOBSTER message and orderbook line parsers (upgrade 2): lob only, so the fuzz build compiles them too.
+add_library(replay STATIC src/replay/lobster.cpp src/replay/lobster_book.cpp)
+target_link_libraries(replay PUBLIC lob PRIVATE lobsim_options)
+
 # Shared differential driver and the crash-file decoder (upgrade 1).
 add_subdirectory(fuzz)
 
@@ -188,6 +192,11 @@ add_test(NAME cli_run_then_replay
     -DOUT=${CMAKE_CURRENT_BINARY_DIR}/cli_run_then_replay
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_replay.cmake)
 
+# LOBSTER line parsers (upgrade 2).
+add_executable(replay_tests tests/unit/lobster_parse_test.cpp)
+target_link_libraries(replay_tests PRIVATE replay lobsim_options GTest::gtest_main)
+gtest_discover_tests(replay_tests)
+
 # Differential fuzz test (SPEC 4): OrderBook vs ReferenceBook, event for event.
 add_executable(fuzz_diff tests/fuzz_diff.cpp)
 target_include_directories(fuzz_diff PRIVATE tests)
@@ -208,6 +217,7 @@ target_compile_definitions(fuzz_regression_tests PRIVATE LOBSIM_SOURCE_DIR="${CM
 add_test(NAME fuzz_regressions_diff COMMAND fuzz_regression_tests --gtest_filter=Diff/*)
 add_test(NAME fuzz_regressions_diff_builder COMMAND fuzz_regression_tests --gtest_filter=DiffBuilder/*)
 add_test(NAME fuzz_regressions_replay_parse COMMAND fuzz_regression_tests --gtest_filter=ReplayParse/*)
+add_test(NAME fuzz_regressions_lobster_parse COMMAND fuzz_regression_tests --gtest_filter=LobsterParse/*)
 # A gtest filter that matches nothing exits 0; this one fails if the seeds are not found.
 add_test(NAME fuzz_regressions_corpus_found COMMAND fuzz_regression_tests --gtest_filter=FuzzCorpus.*)
 

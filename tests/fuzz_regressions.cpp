@@ -1,5 +1,5 @@
 // Regression tests (upgrade 1, 3.4, 7): every regular file of fuzz/regressions/<kind>/ and then of
-// fuzz/corpus/<kind>/ is run through run_diff (kind diff) or run_replay_parse (kind replay_parse).
+// fuzz/corpus/<kind>/ is run through run_diff (kind diff) or run_replay_parse (kind replay_parse) or run_lobster_parse (kind lobster_parse).
 // Both abort on a failure, so a failing file ends the process; the path is printed to stderr
 // first so ctest's output names it.
 #include <gtest/gtest.h>
@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "diff_driver.hpp"
+#include "lobster_parse_driver.hpp"
 #include "replay_parse_driver.hpp"
 
 namespace {
@@ -103,6 +104,11 @@ TEST(FuzzCorpus, CommittedSeedsAreFound) {
   for (const char* name : {"empty.log", "run_seed1.log", "run_seed2.log", "run_seed3.log"}) {
     EXPECT_TRUE(has_file(replay, name)) << "missing replay_parse seed " << name;
   }
+  const std::vector<Case> lobster = collect_cases("lobster_parse");
+  for (const char* name : {"message_a.csv", "message_b.csv", "book_l10.csv", "book_l10_empty_levels.csv",
+                           "book_l5.csv", "book_l1.csv", "malformed.csv", "crlf.csv"}) {
+    EXPECT_TRUE(has_file(lobster, name)) << "missing lobster_parse seed " << name;
+  }
 }
 
 class DiffRegression : public ::testing::TestWithParam<Case> {};
@@ -149,6 +155,21 @@ TEST_P(ReplayParseRegression, ParsesOrRejectsCleanlyAndRoundTrips) {
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(ReplayParseRegression);
 
 INSTANTIATE_TEST_SUITE_P(ReplayParse, ReplayParseRegression, ::testing::ValuesIn(collect_cases("replay_parse")),
+                         [](const ::testing::TestParamInfo<Case>& info) { return info.param.name; });
+
+class LobsterParseRegression : public ::testing::TestWithParam<Case> {};
+
+TEST_P(LobsterParseRegression, ParsesOrRejectsCleanlyAndRoundTrips) {
+  const Case& c = GetParam();
+  std::fprintf(stderr, "run_lobster_parse: %s\n", c.path.c_str());
+  std::fflush(stderr);
+  const std::vector<std::uint8_t> bytes = read_bytes(c.path);
+  lob::fuzz::run_lobster_parse(bytes.data(), bytes.size());
+}
+
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(LobsterParseRegression);
+
+INSTANTIATE_TEST_SUITE_P(LobsterParse, LobsterParseRegression, ::testing::ValuesIn(collect_cases("lobster_parse")),
                          [](const ::testing::TestParamInfo<Case>& info) { return info.param.name; });
 
 }  // namespace
