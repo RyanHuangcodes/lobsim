@@ -191,6 +191,7 @@ add_executable(lobsim_export_lobster apps/export_lobster_main.cpp)
 target_link_libraries(lobsim_export_lobster PRIVATE orderlog replay lobsim_options)
 
 enable_testing()
+add_subdirectory(viz)
 include(GoogleTest)
 
 add_executable(lob_tests
