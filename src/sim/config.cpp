@@ -28,6 +28,10 @@ void check_keys(const json& j, const std::string& where, std::initializer_list<s
   }
 }
 
+// The empty `where` of the top level, named so `at` is never handed a temporary (a
+// `const json&` bound to the result would otherwise trip -Wdangling-reference on GCC 14).
+const std::string kRoot;
+
 const json& at(const json& j, const std::string& where, const char* key) {
   const auto it = j.find(key);
   if (it == j.end()) bad(where.empty() ? key : where + "." + key, "missing");
@@ -92,7 +96,7 @@ SimConfig parse_config(const json& j) {
   SimConfig c;
   {
     // Any unsigned 64-bit seed, as `--seed` accepts.
-    const json& v = at(j, "", "seed");
+    const json& v = at(j, kRoot, "seed");
     if (!v.is_number_integer()) bad("seed", "must be an integer");
     if (v.is_number_unsigned()) c.seed = v.get<std::uint64_t>();
     else if (v.get<std::int64_t>() < 0) bad("seed", "must be >= 0");
@@ -105,14 +109,14 @@ SimConfig parse_config(const json& j) {
   c.tick_display = number(j, "", "tick_display");
 
   {
-    const json& f = at(j, "", "fundamental");
+    const json& f = at(j, kRoot, "fundamental");
     check_keys(f, "fundamental", {"sigma_ticks_per_sqrt_s", "dt_s"});
     c.fundamental.sigma_ticks_per_sqrt_s = number(f, "fundamental", "sigma_ticks_per_sqrt_s");
     c.fundamental.dt_s = number(f, "fundamental", "dt_s");
   }
   {
     const std::string w = "noise_traders";
-    const json& n = at(j, "", "noise_traders");
+    const json& n = at(j, kRoot, "noise_traders");
     check_keys(n, w, {"count", "lambda", "p_limit", "order_lifetime_mean_s", "D", "max_size", "latency_us",
                      "reference_price"});
     const std::int64_t count = integer(n, w, "count");
@@ -163,7 +167,7 @@ SimConfig parse_config(const json& j) {
     c.mm = mm;
   }
   {
-    const json& h = at(j, "", "markout_horizons_s");
+    const json& h = at(j, kRoot, "markout_horizons_s");
     if (!h.is_array()) bad("markout_horizons_s", "must be an array of numbers");
     for (const json& v : h) {
       if (!v.is_number()) bad("markout_horizons_s", "must be an array of numbers");

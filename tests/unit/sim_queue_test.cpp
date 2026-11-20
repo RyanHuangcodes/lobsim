@@ -44,7 +44,9 @@ TEST(EventQueue, EqualTimesPopInSchedulingOrderWhateverTheAgentAndKind) {
     const SimEvent ev = q.pop();
     EXPECT_GE(ev.time, last);
     // Every pair of consecutive equal-time events, at every time, is in scheduling order.
-    if (!first && ev.time == last) EXPECT_GT(ev.seq, last_seq);
+    if (!first && ev.time == last) {
+      EXPECT_GT(ev.seq, last_seq);
+    }
     first = false;
     last = ev.time;
     last_seq = ev.seq;

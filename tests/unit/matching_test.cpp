@@ -128,7 +128,9 @@ TYPED_TEST(MatchingTest, AckComesFirstIdsAndTradeIdsCountUpFromOne) {
   EXPECT_EQ(h.last(), (Events{ack(3, 3), trade(2, 100, 3, 1, 3, 1, 3, Buy)}));
 
   for (const Event& ev : h.all()) {
-    if (const auto* t = std::get_if<Trade>(&ev)) EXPECT_GE(t->trade_id, 1u);
+    if (const auto* t = std::get_if<Trade>(&ev)) {
+      EXPECT_GE(t->trade_id, 1u);
+    }
   }
   // Every request's first event is its Ack.
   h.submit(ioc(4, Buy, 90, 1));
