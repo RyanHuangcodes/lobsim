@@ -1,0 +1,56 @@
+name: fuzz-nightly
+
+on:
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang-18 llvm-18 libclang-rt-18-dev
+      - name: Configure
+        run: >
+          cmake -S . -B build-fuzz
+          -DCMAKE_C_COMPILER=clang-18
+          -DCMAKE_CXX_COMPILER=clang++-18
+          -DLOBSIM_FUZZ=ON
+      - name: Build
+        run: cmake --build build-fuzz -j "$(nproc)"
+      - name: Fuzz diff (30 min)
+        run: |
+          mkdir -p fuzz-work/diff fuzz-artifacts
+          ./build-fuzz/fuzz/fuzz_diff fuzz-work/diff fuzz/corpus/diff \
+            -max_len=4096 -max_total_time=1800 -timeout=10 \
+            -artifact_prefix=fuzz-artifacts/ -print_final_stats=1
+      - name: Fuzz replay parser (10 min)
+        run: |
+          mkdir -p fuzz-work/replay_parse fuzz-artifacts
+          ./build-fuzz/fuzz/fuzz_replay_parse fuzz-work/replay_parse fuzz/corpus/replay_parse \
+            -max_len=4096 -max_total_time=600 -timeout=10 \
+            -artifact_prefix=fuzz-artifacts/ -print_final_stats=1
+      - name: Compute date
+        if: always()
+        id: date
+        run: echo "stamp=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+      - name: Upload grown corpus
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: corpus-${{ steps.date.outputs.stamp }}
+          path: fuzz-work/
+          if-no-files-found: ignore
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-nightly-artifacts-${{ steps.date.outputs.stamp }}
+          path: fuzz-artifacts/
+          if-no-files-found: ignore

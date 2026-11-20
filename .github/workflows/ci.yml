@@ -1,0 +1,206 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build-test (${{ matrix.compiler }}, ${{ matrix.build_type }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        build_type: [Debug, Release]
+        include:
+          - compiler: gcc
+            cc: gcc-14
+            cxx: g++-14
+          - compiler: clang
+            cc: clang-18
+            cxx: clang++-18
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_C_COMPILER=${{ matrix.cc }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          -DLOBSIM_WERROR=ON
+      - name: Build
+        run: cmake --build build -j "$(nproc)"
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -j "$(nproc)"
+
+  sanitize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=clang-18
+          -DCMAKE_CXX_COMPILER=clang++-18
+          -DLOBSIM_WERROR=ON
+          -DLOBSIM_SANITIZE=ON
+      - name: Build
+        run: cmake --build build -j "$(nproc)"
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -j "$(nproc)"
+
+  fuzz-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang-18 llvm-18 libclang-rt-18-dev
+      - name: Configure
+        run: >
+          cmake -S . -B build-fuzz
+          -DCMAKE_C_COMPILER=clang-18
+          -DCMAKE_CXX_COMPILER=clang++-18
+          -DLOBSIM_FUZZ=ON
+      - name: Build
+        run: cmake --build build-fuzz -j "$(nproc)"
+      - name: Fuzz diff (60 s)
+        run: |
+          mkdir -p fuzz-work/diff fuzz-artifacts
+          ./build-fuzz/fuzz/fuzz_diff fuzz-work/diff fuzz/corpus/diff \
+            -max_len=4096 -max_total_time=60 -timeout=10 \
+            -artifact_prefix=fuzz-artifacts/ -print_final_stats=1
+      - name: Fuzz replay parser (60 s)
+        run: |
+          mkdir -p fuzz-work/replay_parse fuzz-artifacts
+          ./build-fuzz/fuzz/fuzz_replay_parse fuzz-work/replay_parse fuzz/corpus/replay_parse \
+            -max_len=4096 -max_total_time=60 -timeout=10 \
+            -artifact_prefix=fuzz-artifacts/ -print_final_stats=1
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-smoke-artifacts
+          path: fuzz-artifacts/
+          if-no-files-found: ignore
+
+  fuzz-canary:
+    name: fuzz-canary (${{ matrix.bug }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        bug:
+          - LOBSIM_BUG_TAKER_PRICE
+          - LOBSIM_BUG_MODIFY_KEEPS_PRIORITY
+          - LOBSIM_BUG_FOK_IGNORES_STP
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang-18 llvm-18 libclang-rt-18-dev
+      - name: Configure
+        run: >
+          cmake -S . -B build-fuzz
+          -DCMAKE_C_COMPILER=clang-18
+          -DCMAKE_CXX_COMPILER=clang++-18
+          -DLOBSIM_FUZZ=ON
+          -DLOBSIM_INJECT_BUG=${{ matrix.bug }}
+      - name: Build
+        run: cmake --build build-fuzz -j "$(nproc)"
+      - name: Fuzz must find the injected bug
+        run: |
+          mkdir -p fuzz-work/diff fuzz-artifacts
+          start=$SECONDS
+          set +e
+          ./build-fuzz/fuzz/fuzz_diff fuzz-work/diff fuzz/corpus/diff \
+            -max_len=4096 -max_total_time=300 -timeout=10 \
+            -artifact_prefix=fuzz-artifacts/ -print_final_stats=1
+          rc=$?
+          set -e
+          elapsed=$((SECONDS - start))
+          crash=""
+          for f in fuzz-artifacts/crash-*; do
+            if [ -e "$f" ]; then crash=$f; break; fi
+          done
+          if [ "$rc" -ne 0 ] && [ -n "$crash" ]; then
+            echo "PASS: ${{ matrix.bug }} found after ${elapsed}s, crash file: $(basename "$crash")"
+          else
+            echo "FAIL: ${{ matrix.bug }} not detected (exit code $rc, ${elapsed}s, no crash file)"
+            exit 1
+          fi
+      - name: Upload crash artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-canary-${{ matrix.bug }}
+          path: fuzz-artifacts/
+          if-no-files-found: ignore
+
+  coverage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang-18 llvm-18
+      - name: Configure
+        run: >
+          cmake -S . -B build-cov
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=clang-18
+          -DCMAKE_CXX_COMPILER=clang++-18
+          -DCMAKE_CXX_FLAGS="-fprofile-instr-generate -fcoverage-mapping"
+          -DCMAKE_EXE_LINKER_FLAGS=-fprofile-instr-generate
+      - name: Build
+        run: cmake --build build-cov -j "$(nproc)"
+      - name: Test with profiling
+        run: |
+          mkdir -p prof
+          LLVM_PROFILE_FILE="$PWD/prof/%p-%m.profraw" \
+            ctest --test-dir build-cov --output-on-failure -j "$(nproc)"
+      - name: Coverage report
+        run: |
+          llvm-profdata-18 merge -sparse prof/*.profraw -o lobsim.profdata
+          exes=()
+          for name in lob_tests sim_tests fuzz_diff fuzz_regression_tests fuzz_decode_tests lobsim_run lobsim_replay lobsim_bench; do
+            if [ -x "build-cov/$name" ]; then
+              exes+=("build-cov/$name")
+            else
+              echo "missing test executable: build-cov/$name"
+            fi
+          done
+          if [ "${#exes[@]}" -eq 0 ]; then
+            echo "no test executables found"
+            exit 1
+          fi
+          args=("${exes[0]}")
+          for exe in "${exes[@]:1}"; do
+            args+=("-object" "$exe")
+          done
+          ignore='(_deps|tests|src/sim|include/sim|apps|bench|fuzz)/|^/usr/'
+          llvm-cov-18 report "${args[@]}" -instr-profile=lobsim.profdata \
+            -ignore-filename-regex="$ignore" | tee cov-report.txt
+          awk '/src\/lob/ { total += $8; missed += $9 }
+               END { if (total > 0) printf "src/lob line coverage: %.2f%%\n", 100 * (total - missed) / total
+                     else print "src/lob line coverage: n/a" }' cov-report.txt
+          llvm-cov-18 show "${args[@]}" -instr-profile=lobsim.profdata \
+            -ignore-filename-regex="$ignore" -format=html -output-dir=cov-html
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v7
+        with:
+          name: cov-html
+          path: cov-html/
