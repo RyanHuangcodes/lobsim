@@ -257,6 +257,15 @@ foreach(_variant unfiltered filtered)
       -DOUT=${CMAKE_CURRENT_BINARY_DIR}/lobster_closed_loop_${_variant}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/lobster_closed_loop.cmake)
 endforeach()
+# Fake-day mode (upgrade 2b, D3): the LOBSTER-like export is deterministic, refuses data/lobster, and
+# the replay counts exactly the injected hidden executions and halt.
+add_test(NAME lobster_like_fake_day
+  COMMAND ${CMAKE_COMMAND}
+    -DRUN=$<TARGET_FILE:lobsim_run> -DEXPORT=$<TARGET_FILE:lobsim_export_lobster>
+    -DLOBSTER=$<TARGET_FILE:lobsim_lobster>
+    -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/configs/default.json
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/lobster_like_fake_day
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/lobster_like.cmake)
 add_test(NAME lobster_export_fixture
   COMMAND ${CMAKE_COMMAND}
     -DEXPORT=$<TARGET_FILE:lobsim_export_lobster> -DLOBSTER=$<TARGET_FILE:lobsim_lobster>
