@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>lobsim replay dashboard</title>
+  <link rel="stylesheet" href="vendor/uplot/uPlot.min.css" />
+  <link rel="stylesheet" href="css/style.css" />
+  <!-- uPlot is vendored as an IIFE global (window.uPlot); the module entry reads it. -->
+  <script src="vendor/uplot/uPlot.iife.min.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <h1 id="run-title">lobsim replay</h1>
+    <span class="header-stat">seed <b id="stat-seed">--</b></span>
+    <span class="header-stat">duration <b id="stat-duration">--</b></span>
+    <span class="header-stat" id="stat-mm-pnl-wrap">MM PnL <b id="stat-mm-pnl">--</b></span>
+    <span class="header-stat" id="stat-fills-wrap">fills <b id="stat-fills">--</b></span>
+    <span class="header-stat" id="stat-inv-wrap">final inventory <b id="stat-inv">--</b></span>
+  </header>
+
+  <main>
+    <div id="status">Loading… use <code>?run=&lt;name&gt;</code> or the Open run button.</div>
+
+    <!-- Controls row scopes every panel -->
+    <div class="controls" role="group" aria-label="Playback controls">
+      <button class="btn" id="btn-open">Open run…</button>
+      <input type="file" id="file-input" accept=".json,.bin,application/json,application/octet-stream" multiple class="hidden" />
+      <button class="btn" id="btn-play" aria-pressed="false" title="Space">▶ Play</button>
+      <label for="speed-select">Speed</label>
+      <select id="speed-select">
+        <option value="1">1×</option>
+        <option value="10">10×</option>
+        <option value="60" selected>60×</option>
+        <option value="600">600×</option>
+      </select>
+      <input type="range" id="time-slider" min="0" max="1000" value="0" step="1" aria-label="Scrub time" />
+      <span class="time-readout" id="time-readout">00:00.000</span>
+      <label for="jump-time">Jump</label>
+      <input type="text" id="jump-time" size="10" placeholder="mm:ss" aria-label="Jump to time" />
+      <span class="spacer"></span>
+      <button class="btn theme-toggle" id="btn-theme" aria-pressed="false">Dark</button>
+    </div>
+
+    <!-- Main row: heatmap (~70%) + depth ladder (~30%) -->
+    <div class="main-row">
+      <section class="panel heatmap-panel">
+        <h2>Order-book heatmap
+          <button class="btn table-toggle" data-panel="heatmap" aria-pressed="false">Table view</button>
+        </h2>
+        <div class="heatmap-wrap">
+          <canvas id="heatmap-canvas" width="900" height="360" tabindex="0" aria-label="Order book heatmap"></canvas>
+          <canvas id="heatmap-legend" width="60" height="360" aria-label="Size legend"></canvas>
+        </div>
+        <div class="legend-swatches">
+          <span><i style="background:var(--buy)"></i>best bid</span>
+          <span><i style="background:var(--sell)"></i>best ask</span>
+          <span><i style="background:var(--buy);border-radius:50%;width:8px;height:8px"></i>buy trade</span>
+          <span><i style="background:var(--sell);border-radius:50%;width:8px;height:8px"></i>sell trade</span>
+        </div>
+        <div class="table-view hidden" data-panel-table="heatmap"></div>
+      </section>
+
+      <section class="panel ladder-panel">
+        <h2>Depth ladder
+          <button class="btn table-toggle" data-panel="ladder" aria-pressed="false">Table view</button>
+        </h2>
+        <table class="ladder" id="ladder-table">
+          <thead>
+            <tr><th>Bid size</th><th>Price</th><th>Ask size</th></tr>
+          </thead>
+          <tbody id="ladder-body"></tbody>
+        </table>
+        <div class="table-view hidden" data-panel-table="ladder"></div>
+      </section>
+    </div>
+
+    <!-- Price chart -->
+    <section class="panel chart-panel">
+      <h2>Price: mid, fundamental, MM bid, MM ask, trades
+        <button class="btn table-toggle" data-panel="price" aria-pressed="false">Table view</button>
+      </h2>
+      <div class="uplot-host" id="chart-price"></div>
+      <div class="table-view hidden" data-panel-table="price"></div>
+    </section>
+
+    <!-- MM inventory -->
+    <section class="panel chart-panel" id="panel-inventory">
+      <h2>MM inventory
+        <button class="btn table-toggle" data-panel="inventory" aria-pressed="false">Table view</button>
+      </h2>
+      <div class="uplot-host" id="chart-inventory"></div>
+      <div class="table-view hidden" data-panel-table="inventory"></div>
+    </section>
+
+    <!-- MM PnL -->
+    <section class="panel chart-panel" id="panel-pnl">
+      <h2>MM PnL
+        <button class="btn table-toggle" data-panel="pnl" aria-pressed="false">Table view</button>
+      </h2>
+      <div class="uplot-host" id="chart-pnl"></div>
+      <div class="table-view hidden" data-panel-table="pnl"></div>
+    </section>
+  </main>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
