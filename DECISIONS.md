@@ -164,3 +164,10 @@ One line per decision, with the reason. Section numbers refer to `SPEC.md`.
   stat::slowest_unit_time_sec:    0
   stat::peak_rss_mb:              517
   ```
+
+## Documentation and CI notes (upgrade 1, F6-F7)
+- D-145 `LOBSIM_WERROR` already existed with default ON (D-006); SPEC upgrade 1, 8.1 says "add it, default OFF". It stays ON (stricter; CI also passes `-DLOBSIM_WERROR=ON` explicitly), because the code's existing names and behaviour win (SPEC upgrade 1, 0).
+- D-146 CI runs on `ubuntu-24.04` with `gcc-14` / `g++-14` and `clang-18` / `clang++-18`, and uses `actions/checkout@v7` and `actions/upload-artifact@v7` (the latest majors when checked: v7.0.1 and v7.0.2). Every configure sets the C compiler too, because googletest's `project()` enables C, and with gcc as the C compiler the coverage build's `-fprofile-instr-generate` link flag breaks googletest's configure.
+- D-147 actionlint 1.7.12 (with shellcheck) reports no findings on `ci.yml` and `fuzz-nightly.yml`.
+- D-148 Coverage of `src/lob` (Clang 18 source-based, Debug, every ctest test, profiles merged): `order_book.cpp` 99.67% (305 lines, 1 missed: line 399, the "pool holds N live orders but M rest" failure of `validate()`, unreachable unless the pool's bookkeeping is corrupted, which the white-box validate tests do not do for this invariant); `reference_book.cpp` 99.13% (231 lines, 2 missed: the "book is crossed" failure branch of `validate()`, unreachable unless matching leaves a crossed book); `src/lob` in total 99.44%. `include/lob/events.hpp` 78.9% and `types.hpp` 77.1%: the uncovered lines are `to_string()` printers used only in failure reports. No seed or test was added for them: covering a failure branch needs a corrupted book, which the existing white-box validate tests already provide for the reachable invariants.
+- D-149 The README badge points at `RyanHuangcodes/lobsim` (the origin remote) instead of the placeholders of the spec; it shows the status of `main` once this branch is merged.

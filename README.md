@@ -1,5 +1,7 @@
 # lobsim
 
+[![CI](https://github.com/RyanHuangcodes/lobsim/actions/workflows/ci.yml/badge.svg)](https://github.com/RyanHuangcodes/lobsim/actions/workflows/ci.yml)
+
 A limit order book, matching engine and agent-based trading simulator in C++20.
 
 - **Matching engine** (`lob`): price-time priority, limit GTC/IOC/FOK, market and post-only orders, modify with explicit priority rules, and two self-trade-prevention modes. A fast `OrderBook` (`std::map` price levels, intrusive FIFO lists, a pooled order store, O(1) lookup by id) runs about 47 million messages per second on one core. It is checked event for event against a deliberately naive `ReferenceBook`.
@@ -18,11 +20,12 @@ Same config and seed give byte-identical output files. `SPEC.md` is the original
 - [Benchmarks](#benchmarks)
 - [Design decisions and trade-offs](#design-decisions-and-trade-offs)
 - [Testing](#testing)
+- [How correctness is verified](#how-correctness-is-verified)
 - [What is not modelled](#what-is-not-modelled)
 
 ## Build, test and run
 
-Requirements: a C++20 compiler (the specification targets GCC 11+ and Clang 14+; the project has been built and tested only with Apple clang 17 on an arm64 Mac), CMake 3.21+ for the presets (3.20 works with plain `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`), and network access on the first configure: googletest v1.14.0, Google Benchmark v1.8.3 and nlohmann/json v3.11.3 are fetched at pinned tags. The plotting script needs Python 3 with pandas and matplotlib; the sweep script needs only the standard library.
+Requirements: a C++20 compiler (the specification targets GCC 11+ and Clang 14+; the project is built and tested with Apple clang 17 on an arm64 Mac, and in CI on Linux with GCC 14 and Clang 18), CMake 3.21+ for the presets (3.20 works with plain `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`), and network access on the first configure: googletest v1.14.0, Google Benchmark v1.8.3 and nlohmann/json v3.11.3 are fetched at pinned tags. The plotting script needs Python 3 with pandas and matplotlib; the sweep script needs only the standard library.
 
 ```
 cmake --preset release && cmake --build --preset release -j && ctest --preset release
@@ -30,7 +33,7 @@ cmake --preset debug    && cmake --build --preset debug -j    && ctest --preset 
 cmake --preset sanitize && cmake --build --preset sanitize -j && ctest --preset sanitize   # ASan + UBSan
 ```
 
-The suite has 371 tests in the debug and release builds and 372 in the sanitize build (one pool test exists only under AddressSanitizer). All three builds compile with `-Wall -Wextra -Wpedantic -Werror`. On an Apple M4 the sanitize suite takes about 100 seconds, most of it the differential fuzz test.
+The suite has 409 tests in the debug and release builds and 410 in the sanitize build (one pool test exists only under AddressSanitizer). All three builds compile with `-Wall -Wextra -Wpedantic -Werror` (`LOBSIM_WERROR`, on by default). The libFuzzer targets and the commands to build them (`-DLOBSIM_FUZZ=ON`, LLVM Clang only) are in [FUZZING.md](FUZZING.md). On an Apple M4 the sanitize suite takes about 100 seconds, most of it the differential fuzz test.
 
 Run the default one-hour simulation, check its replay, and draw its plots:
 
@@ -350,14 +353,28 @@ Departures from the specification, each recorded with its evidence:
 | Test | What it checks |
 |---|---|
 | Unit tests (`lob_tests`) | Every rule of the matching engine as small hand-checked scenarios, typed over both books, with `validate()` and a quantity-conservation checker after every message |
-| Differential fuzz test (`fuzz_diff`) | 200 seeds × 10,000 random valid and invalid requests (10 ctest entries), and `--long` for 4 × 1,000,000: both books must produce identical events, queries and hashes. It fails if any event type, reject reason, cancel reason or self-trade path never occurred. |
+| Seeded differential test (`tests/fuzz_diff.cpp`) | 200 seeds × 10,000 random valid and invalid requests (10 ctest entries), and `--long` for 4 × 1,000,000: both books must produce identical events, queries and hashes. It fails if any event type, reject reason, cancel reason or self-trade path never occurred. |
 | Deep-book test | `OrderBook` grown to three pool chunks (8,500 orders), slots freed and reused, and fully drained, against `ReferenceBook` |
 | Simulator tests (`sim_tests`) | RNG known answers and unbiasedness, tie-breaking by scheduling order, FIFO channels, the order-log codec, exchange routing, each agent through a scripted context, the market maker's races and inventory bound, every metric on hand-worked scenarios |
 | Determinism | The same seed twice in one process gives byte-identical output files; adding an agent or an observer leaves other agents' decisions unchanged |
 | Replay | The live run's event hash equals the hash of its log replayed through the text, in process and through the command-line tools |
+| Fuzz regression tests | Every committed fuzz seed and every saved crash input runs through the same differential check and the `orders.log` parser check that the libFuzzer targets use |
 | Sanitizers | The whole suite under AddressSanitizer and UndefinedBehaviorSanitizer |
 
 Several tests were strengthened after injected bugs showed they could not see the failure they were written for. No test pins a fixed simulation hash, because the hash can differ across platforms' maths libraries; tests compare runs with each other instead.
+
+## How correctness is verified
+
+- **Unit tests**: every rule as a small scenario that can be checked by hand.
+- **Invariants**: `validate()` checks the book's structure (level and list links, quantity totals, the id index, the pool, and that the book is never crossed) after every request in the tests and in Debug builds.
+- **Seeded differential test**: 200 seeds of 10,000 random requests, `OrderBook` against the naive `ReferenceBook`, event for event.
+- **Coverage-guided differential fuzzing**: libFuzzer runs the same comparison on inputs it evolves from the committed seeds, and a second fuzzer feeds arbitrary bytes to the `orders.log` parser and checks that it either rejects them cleanly or round-trips them.
+- **Injected-bug canaries**: three deliberate matching bugs (trade at the taker's price, a quantity increase keeping priority, fill-or-kill ignoring self-trade prevention) that CI requires the fuzzer to catch.
+- **Sanitizers**: the whole suite and the fuzzers under AddressSanitizer and UndefinedBehaviorSanitizer.
+- **Replay hash**: `orders.log` replays through a fresh engine to the same event hash as the live run.
+- **Coverage**: line coverage of the matching engine (`src/lob`, measured by the CI coverage job): 99.4% (536 lines, 3 not executed: failure branches of `validate()` that a healthy book cannot reach).
+
+All three injected bugs are caught in under 1 s from the seed corpus, and in under 1 s (about 3,000 executions) with no seeds at all. How to run the fuzzers, handle a crash and read the numbers: [FUZZING.md](FUZZING.md).
 
 ## What is not modelled
 
