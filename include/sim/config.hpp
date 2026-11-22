@@ -1,12 +1,14 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include <nlohmann/json_fwd.hpp>
 
+#include "calib/calibration.hpp"
 #include "lob/types.hpp"
 #include "sim/latency.hpp"
 #include "sim/messages.hpp"
@@ -49,6 +51,17 @@ struct MarketMakerConfig {
   LatencySpec latency;
 };
 
+// The optional `background` section: one CalibratedFlowAgent that generates the whole
+// background flow from a calibration file (SPEC upgrade 3, 3). Absent: the noise traders.
+struct BackgroundConfig {
+  std::string file;  // as given (relative to the config file's directory) or absolute, once resolved
+  std::uint32_t owner_count{50};
+  LatencySpec latency;
+  std::optional<lob::Price> start_price;  // default: the calibration's median_mid_ticks
+  // Loaded and validated with the config, shared by copies of the config.
+  std::shared_ptr<const calib::Calibration> calibration;
+};
+
 // Mirrors configs/default.json (SPEC 5.8) field for field. The `_ns` members are derived
 // once by finalize(): durations are never recomputed from doubles at run time.
 struct SimConfig {
@@ -62,6 +75,7 @@ struct SimConfig {
   NoiseTradersConfig noise_traders;
   std::optional<InformedConfig> informed;  // the agent exists only if the section does
   std::optional<MarketMakerConfig> mm;
+  std::optional<BackgroundConfig> background;  // the section exists only if the config has it
   std::vector<double> markout_horizons_s;
   double sample_interval_s{1.0};
 
@@ -75,7 +89,10 @@ struct SimConfig {
 
 // Parses and validates. Throws std::runtime_error naming the field for a missing key, a
 // wrong type, an unknown key (a typo must not be silently ignored) or a bad value.
-SimConfig parse_config(const nlohmann::json& j);
+// `base_dir` is what a relative `background.file` is resolved against (load_config passes the
+// config file's directory); empty means the current directory. The calibration file is read
+// and validated here.
+SimConfig parse_config(const nlohmann::json& j, const std::string& base_dir = {});
 SimConfig load_config(const std::string& path);
 
 // Checks every value and fills the derived `_ns` members. Call again after changing a

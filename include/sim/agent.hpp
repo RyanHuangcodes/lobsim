@@ -22,6 +22,13 @@ class Context {
   // latency jitter, and jitter is consumed at a rate set by every other agent.
   virtual Xoshiro256StarStar& rng() = 0;
   virtual lob::OwnerId self() const = 0;
+  // An agent normally has one owner id, self(). A kernel can give it more (a calibrated
+  // background flow spreads its orders over many owners so its own orders rarely meet each
+  // other under self-trade prevention): owner_id(0) == self(), owner_id(k) for k < owner_count()
+  // are all the ids it may put on a request, and owns() tells whether an id of an event is its.
+  virtual std::uint32_t owner_count() const { return 1; }
+  virtual lob::OwnerId owner_id(std::uint32_t /*k*/) const { return self(); }
+  virtual bool owns(lob::OwnerId owner) const { return owner == self(); }
 };
 
 // An agent sees the market only through on_market_data() (delayed public data) and

@@ -139,6 +139,7 @@ MetricsOptions make_metrics_options(const SimConfig& cfg) {
     o.maker_fee_ticks = cfg.mm->maker_fee_ticks;
     o.taker_fee_ticks = cfg.mm->taker_fee_ticks;
   }
+  if (cfg.background) o.roles.push_back(Role::Noise);  // the calibrated flow is the background
   return o;
 }
 
@@ -173,6 +174,7 @@ MetricsObserver::MetricsObserver(MetricsOptions options) : opt_(std::move(option
 }
 
 Role MetricsObserver::role_of_owner(lob::OwnerId owner) const noexcept {
+  if (owner >= kExtraOwnerBase) return Role::Noise;  // the extra owner ids of the background flow
   if (owner == 0 || owner > opt_.roles.size()) return Role::Other;
   return opt_.roles[owner - 1];
 }

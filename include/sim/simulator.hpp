@@ -51,6 +51,12 @@ class Simulator {
   // (role, index, Decisions) and (role, index, Latency). Must be called before run().
   AgentIndex add_agent(std::unique_ptr<Agent> agent, const LatencySpec& latency, StreamRole role,
                        std::uint32_t index);
+  // Gives an agent `count` owner ids in all (its own, agent index + 1, and count - 1 more taken
+  // from kExtraOwnerBase upwards, in call order). Requests it sends may carry any of them
+  // (any other owner is replaced by its own, as before), and private events for any of them
+  // are delivered to it, once per event. Must be called before run(). Agents that never call
+  // it keep exactly their old owner id and event order.
+  void set_owner_count(AgentIndex agent, std::uint32_t count);
   // Observers are not owned and must outlive run().
   void add_observer(Observer* observer);
 
@@ -67,6 +73,8 @@ class Simulator {
   std::uint64_t events_processed() const noexcept { return processed_; }
   // Index of the market maker created from the config's `mm` section, if there is one.
   std::optional<AgentIndex> market_maker_index() const noexcept { return market_maker_; }
+  // Index of the calibrated background flow agent, if the config has a `background` section.
+  std::optional<AgentIndex> background_index() const noexcept { return background_; }
 
  private:
   class AgentContext;
@@ -74,6 +82,7 @@ class Simulator {
 
   void handle_request(const SimEvent& ev);
   void deliver_private(lob::OwnerId owner, const lob::Event& event);
+  AgentIndex agent_of_owner(lob::OwnerId owner) const;
 
   SimConfig cfg_;
   EventQueue queue_;
@@ -86,6 +95,8 @@ class Simulator {
   std::uint64_t sample_k_{1};
   std::uint64_t processed_{0};
   std::optional<AgentIndex> market_maker_;
+  std::optional<AgentIndex> background_;
+  std::vector<AgentIndex> extra_owner_agent_;  // owner kExtraOwnerBase + i belongs to this agent
   bool ran_{false};
 };
 

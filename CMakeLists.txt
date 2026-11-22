@@ -165,6 +165,7 @@ endif()
 
 # The simulator. It depends on lob; lob does not depend on it.
 add_library(sim STATIC
+  src/sim/agents/calibrated_flow.cpp
   src/sim/as_market_maker.cpp
   src/sim/config.cpp
   src/sim/exchange.cpp
@@ -172,7 +173,7 @@ add_library(sim STATIC
   src/sim/metrics.cpp
   src/sim/noise_trader.cpp
   src/sim/simulator.cpp)
-target_link_libraries(sim PUBLIC lob orderlog nlohmann_json::nlohmann_json PRIVATE lobsim_options)
+target_link_libraries(sim PUBLIC lob orderlog calibfile nlohmann_json::nlohmann_json PRIVATE lobsim_options)
 # No fused multiply-add: floating-point results must not depend on the build type. PUBLIC,
 # because the generators and the fundamental value are inline in headers and are compiled
 # into whatever uses them.
@@ -224,6 +225,7 @@ add_executable(sim_tests
   tests/unit/sim_mm_integration_test.cpp
   tests/unit/sim_integration_test.cpp
   tests/unit/sim_metrics_test.cpp
+  tests/unit/sim_calibrated_flow_test.cpp
   tests/determinism.cpp
   tests/replay.cpp)
 target_include_directories(sim_tests PRIVATE tests)
@@ -278,6 +280,15 @@ add_test(NAME lobster_like_fake_day
     -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/configs/default.json
     -DOUT=${CMAKE_CURRENT_BINARY_DIR}/lobster_like_fake_day
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/lobster_like.cmake)
+# Calibrated background flow (upgrade 3, C2): a hand-made calibration drives the whole market, the run is
+# exported and replayed clean, and the message rates are near the configured ones.
+add_test(NAME calibrated_flow_closed_loop
+  COMMAND ${CMAKE_COMMAND}
+    -DRUN=$<TARGET_FILE:lobsim_run> -DEXPORT=$<TARGET_FILE:lobsim_export_lobster>
+    -DLOBSTER=$<TARGET_FILE:lobsim_lobster>
+    -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calib/flow_small_run.json
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/calibrated_flow_closed_loop
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/calibrated_flow_closed_loop.cmake)
 add_test(NAME lobster_export_fixture
   COMMAND ${CMAKE_COMMAND}
     -DEXPORT=$<TARGET_FILE:lobsim_export_lobster> -DLOBSTER=$<TARGET_FILE:lobsim_lobster>
