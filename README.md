@@ -1,14 +1,47 @@
 # lobsim
 
 [![CI](https://github.com/RyanHuangcodes/lobsim/actions/workflows/ci.yml/badge.svg)](https://github.com/RyanHuangcodes/lobsim/actions/workflows/ci.yml)
+[![Pages](https://github.com/RyanHuangcodes/lobsim/actions/workflows/pages.yml/badge.svg)](https://ryanhuangcodes.github.io/lobsim/?run=demo)
 
-A limit order book, matching engine and agent-based trading simulator in C++20.
+A limit order book, matching engine and agent-based trading simulator in C++20, with a differential fuzzer that proves the fast engine matches a simple reference engine, a LOBSTER replayer for exchange data, and a browser dashboard that replays a simulated hour.
 
-- **Matching engine** (`lob`): price-time priority, limit GTC/IOC/FOK, market and post-only orders, modify with explicit priority rules, and two self-trade-prevention modes. A fast `OrderBook` (`std::map` price levels, intrusive FIFO lists, a pooled order store, O(1) lookup by id) runs about 47 million messages per second on one core. It is checked event for event against a deliberately naive `ReferenceBook`.
+**Live dashboard:** [ryanhuangcodes.github.io/lobsim/?run=demo](https://ryanhuangcodes.github.io/lobsim/?run=demo) replays one simulated hour (default config, seed 42): order-book heatmap, depth ladder, price and fair value, and the market maker's inventory and PnL on one timeline.
+
+## At a glance
+
+| | |
+|---|---|
+| Throughput | ~47.5 million messages/s on one core (median of 3 runs: 45.4 to 49.2), Apple M4 |
+| Latency | p99 26 ns per message, timed in batches of 32 (the clock steps in 41 ns, see [Benchmarks](#benchmarks)) |
+| Versus the naive reference book | 31x faster, identical event hash |
+| Correctness | Event-for-event differential testing and coverage-guided fuzzing against a reference engine; 99.4% line coverage of the matching engine |
+| Injected-bug canaries | 3 deliberate matching bugs, each caught by the fuzzer in under 1 s (with or without seed inputs); CI fails if any stops being caught |
+| Determinism | Same config and seed give byte-identical output; the order log replays to the same engine event hash |
+| CI | GCC and Clang, Debug and Release, ASan + UBSan, fuzz smoke tests, canaries, coverage, nightly fuzzing, automatic dashboard deploy |
+
+## What's in it
+
+- **Matching engine** (`lob`): price-time priority, limit GTC/IOC/FOK, market and post-only orders, modify with explicit priority rules, and two self-trade-prevention modes. A fast `OrderBook` (`std::map` price levels, intrusive FIFO lists, a pooled order store, O(1) lookup by id) is checked event for event against a deliberately naive `ReferenceBook`.
 - **Simulator** (`sim`): a deterministic discrete-event simulation with per-agent latency. Ten zero-intelligence noise traders, an informed trader who sees a latent fundamental value, and an Avellaneda–Stoikov market maker trade through the engine. Agents see the market only through delayed messages, and fills happen only through the engine, so queue position is real.
 - **Outputs**: every trade, sampled top of book, every market-maker fill with markouts, a `summary.json` of all metrics, and the full request log, which replays to the same engine event hash.
+- **Fuzzing and CI** ([FUZZING.md](FUZZING.md)): libFuzzer targets for the engine and both parsers, injected-bug canaries that CI requires the fuzzer to catch, and a nightly fuzz run.
+- **LOBSTER replay** ([REAL_DATA.md](REAL_DATA.md)): `lobsim_lobster` rebuilds the book from a LOBSTER message file, compares it with the published book after every message, and checks lobsim's matching rule against every burst of executions. Tested on synthetic data so far; real Nasdaq results are pending.
+- **Dress rehearsal**: two synthetic LOBSTER-like fake days (full opening book, hidden executions, a halt, price-window filtering) with an audit that explains every discrepancy, run in CI.
+- **Replay dashboard** ([DASHBOARD.md](DASHBOARD.md)): `lobsim_viz_export` turns a run into a compact bundle after re-verifying its event hash and PnL, and a no-build static web app replays it. GitHub Actions rebuilds and deploys it to GitHub Pages on every push to `main`.
 
-Same config and seed give byte-identical output files. `SPEC.md` is the original specification and `DECISIONS.md` records every decision the specification left open, one line each with the reason.
+`SPEC.md` is the original specification and `DECISIONS.md` records every decision the specification left open, one line each with the reason.
+
+### Milestones
+
+| | Milestone | Status |
+|---|---|---|
+| 0 | Matching engine, simulator, benchmarks | Done |
+| 1 | Coverage-guided differential fuzzing, injected-bug canaries, CI | Done |
+| 2 | LOBSTER replayer and matching-agreement check | Done; real-data run pending data access |
+| 2b | Dress rehearsal on synthetic LOBSTER-like days, with audit and CI test | Done |
+| 4 | Replay dashboard, deployed to GitHub Pages | Done |
+| 3 | Calibration, and an informed trader that reacts to the size of the mispricing | Next |
+| | Reinforcement-learning environment, binary market-data feed, multithreading | Planned |
 
 ## Contents
 
@@ -20,8 +53,10 @@ Same config and seed give byte-identical output files. `SPEC.md` is the original
 - [Benchmarks](#benchmarks)
 - [Design decisions and trade-offs](#design-decisions-and-trade-offs)
 - [Testing](#testing)
+- [Continuous integration](#continuous-integration)
 - [How correctness is verified](#how-correctness-is-verified)
 - [Real-data replay (data pending)](#real-data-replay-data-pending)
+- [Live dashboard](#live-dashboard)
 - [What is not modelled](#what-is-not-modelled)
 
 ## Build, test and run
@@ -34,7 +69,7 @@ cmake --preset debug    && cmake --build --preset debug -j    && ctest --preset 
 cmake --preset sanitize && cmake --build --preset sanitize -j && ctest --preset sanitize   # ASan + UBSan
 ```
 
-The suite has 515 tests in the debug and release builds and 516 in the sanitize build (one pool test exists only under AddressSanitizer). All three builds compile with `-Wall -Wextra -Wpedantic -Werror` (`LOBSIM_WERROR`, on by default). The libFuzzer targets and the commands to build them (`-DLOBSIM_FUZZ=ON`, LLVM Clang only) are in [FUZZING.md](FUZZING.md). On an Apple M4 the sanitize suite takes about 100 seconds, most of it the differential fuzz test.
+The suite has more than 500 tests, with one extra pool test in the sanitize build that exists only under AddressSanitizer. All three builds compile with `-Wall -Wextra -Wpedantic -Werror` (`LOBSIM_WERROR`, on by default). The libFuzzer targets and the commands to build them (`-DLOBSIM_FUZZ=ON`, LLVM Clang only) are in [FUZZING.md](FUZZING.md). On an Apple M4 the sanitize suite takes about 100 seconds, most of it the differential fuzz test.
 
 Run the default one-hour simulation, check its replay, and draw its plots:
 
@@ -88,9 +123,14 @@ Export a run in LOBSTER format and replay it against its own book with the LOBST
 | `include/lob`, `src/lob` | types and events, `ObjectPool`, `OrderBook`, `ReferenceBook`, `apply()` |
 | `include/sim`, `src/sim` | RNG, event queue, latency channels, exchange, fundamental, config, kernel, metrics, replay, order-log codec |
 | `include/sim/agents` | `NoiseTrader`, `InformedTrader`, `AvellanedaStoikovMM` |
-| `apps` | `lobsim_run`, `lobsim_replay`, `lobsim_bench` |
+| `apps` | `lobsim_run`, `lobsim_replay`, `lobsim_bench`, `lobsim_export_lobster`, `lobsim_lobster` |
 | `bench` | Google Benchmark microbenchmarks |
 | `tests` | unit tests, differential fuzz test, determinism and replay tests, simulator stress tests |
+| `fuzz` | libFuzzer targets (engine differential, book builder, `orders.log` parser, LOBSTER parsers), seed corpora and saved regressions |
+| `viz` | `lobsim_viz_export` and the bundle format ([viz/BUNDLE.md](viz/BUNDLE.md)) |
+| `web` | the static replay dashboard (plain HTML, CSS and ES modules; vendored uPlot) |
+| `scripts` | `run_real_data.sh`, `make_fake_day.sh`, `build_site.sh` and the dashboard test fixture |
+| `.github/workflows` | `ci.yml`, `fuzz-nightly.yml`, `pages.yml` |
 | `tools` | `plot.py`, `sweep.py`, `lobster_audit.py` (checks a replay of a synthetic LOBSTER-like export against the exporter's ground truth) |
 | `docs/sample_run` | the plots of the sample run below |
 
@@ -374,6 +414,21 @@ Departures from the specification, each recorded with its evidence:
 
 Several tests were strengthened after injected bugs showed they could not see the failure they were written for. No test pins a fixed simulation hash, because the hash can differ across platforms' maths libraries; tests compare runs with each other instead.
 
+## Continuous integration
+
+Every push and pull request runs [`ci.yml`](.github/workflows/ci.yml):
+
+| Job | What it does |
+|---|---|
+| `build-test` | GCC and Clang, Debug and Release, with `-Werror`; the whole test suite |
+| `sanitize` | the whole suite under AddressSanitizer and UndefinedBehaviorSanitizer |
+| `fuzz-smoke` | each libFuzzer target for 60 s against the committed corpora, after checking that the code is instrumented |
+| `fuzz-canary` | one build per injected matching bug; the fuzzer must find it, from the corpus and from no seeds at all |
+| `replay-canary` | one build per injected replayer bug; the LOBSTER replay must detect it, and a no-bug control must stay exact |
+| `coverage` | line coverage of the matching engine |
+
+[`fuzz-nightly.yml`](.github/workflows/fuzz-nightly.yml) fuzzes for longer every night, and [`pages.yml`](.github/workflows/pages.yml) rebuilds the dashboard's demo run and deploys it on every push to `main`.
+
 ## How correctness is verified
 
 - **Unit tests**: every rule as a small scenario that can be checked by hand.
@@ -400,6 +455,14 @@ Three numbers from the **synthetic** closed loop (lobsim's own simulator, seed 7
 
 Dress rehearsal on two **synthetic** LOBSTER-like fake days (one simulated hour each, book already full at the start, hidden executions, a halt, price-window filtering; not market data), run through `scripts/run_real_data.sh`: without the price-window filter there is no level-1 correction and every scored burst agrees (SYNTHA 30,403 of 30,403 at trust depth 3); with it, level-1 corrections (2,807 in SYNTHA) and agreement below 100% (87.71%) appear, and `tools/lobster_audit.py` traces every one of them to a delete the filter dropped, which real LOBSTER files drop too. Details, the canaries and the CI test `lobster_dress_rehearsal`: [REAL_DATA.md](REAL_DATA.md#dress-rehearsal-on-synthetic-lobster-like-data-not-real-market-data).
 
+## Live dashboard
+
+[ryanhuangcodes.github.io/lobsim/?run=demo](https://ryanhuangcodes.github.io/lobsim/?run=demo)
+
+The demo is one simulated hour with the default config and seed 42, rebuilt by [`pages.yml`](.github/workflows/pages.yml) on every push to `main`. It shows the order-book heatmap (resting size by price and time, with best bid, best ask and trades), the depth ladder at the cursor with the market maker's quotes labelled, the price / fundamental / MM-quote / trade chart, and the market maker's inventory and PnL, all on one synchronized timeline with play, pause and scrub.
+
+Before writing a bundle, `lobsim_viz_export` rebuilds the book from `orders.log` and checks the engine event hash and the market maker's PnL against the run's `summary.json`; it writes nothing if they differ. To export and view any run locally, read each panel, or set up Pages on a fork: [DASHBOARD.md](DASHBOARD.md).
+
 ## What is not modelled
 
 - One instrument only.
@@ -412,8 +475,4 @@ Dress rehearsal on two **synthetic** LOBSTER-like fake days (one simulated hour 
 - Agents do not learn or adapt, and the fundamental value is a driftless random walk with constant volatility.
 - Fees enter only the market maker's accounting; no agent decides anything based on them.
 
-Stretch goals: an array-indexed price ladder compared against `std::map`, replay of real LOBSTER data (the replayer exists, the data is pending), and a reinforcement-learning environment wrapper.
-
-## Live dashboard
-
-A browser replay of a simulator run is published to GitHub Pages at `https://<user>.github.io/<repo>/`: the order-book heatmap, the depth ladder, the price / fundamental / MM-quote / trade chart, and the market maker's inventory and PnL, all on one synchronized timeline with play, pause and scrub. How to read each panel, export any run, view it locally, and enable Pages: [DASHBOARD.md](DASHBOARD.md).
+Next and stretch goals: calibration with an informed trader whose trading rate grows with the mispricing, replay of real LOBSTER data (the replayer exists, the data is pending), an array-indexed price ladder compared against `std::map`, and a reinforcement-learning environment wrapper.
