@@ -123,6 +123,7 @@ struct Calibration {
   // Diagnostics and validation targets (counters, excluded messages, sign autocorrelation, ...).
   // Written for people and for the validation report; never read by the simulator.
   nlohmann::json report = nlohmann::json::object();
+  bool operator==(const Calibration&) const = default;
 };
 
 // Throws std::runtime_error naming the offending field (e.g. "placement[buy][2].values: not

@@ -245,6 +245,17 @@ target_link_libraries(replay_tests PRIVATE replay lobsim_options nlohmann_json::
 target_compile_definitions(replay_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 gtest_discover_tests(replay_tests)
 
+# The calibration file reader/writer (upgrade 3).
+add_library(calibfile STATIC src/calib/calibration.cpp)
+target_include_directories(calibfile PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(calibfile PUBLIC cxx_std_20)
+target_link_libraries(calibfile PUBLIC nlohmann_json::nlohmann_json PRIVATE lobsim_options)
+
+add_executable(calib_tests tests/unit/calib_file_test.cpp)
+target_link_libraries(calib_tests PRIVATE calibfile lobsim_options GTest::gtest_main)
+target_compile_definitions(calib_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+gtest_discover_tests(calib_tests)
+
 # Closed loop (upgrade 2, R4): a 60 s simulator run exported to LOBSTER files and replayed. Unfiltered:
 # strict mode must be exact on every row at depth 10. Filtered to the top-10 window: resync mode
 # must make no correction at level 1. Everything is generated in the build directory.
