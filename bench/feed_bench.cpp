@@ -8,6 +8,8 @@
 //   BM_FeedParse         parse the whole feed with a handler that does nothing
 //   BM_FeedParseRebuild  parse the whole feed into a FeedBook (bounded by the book, not the parser)
 //   BM_FeedEngineSame    the engine itself on the same requests, for comparison on the same machine
+//   BM_MoldPacketize     the whole feed into MoldUDP64 packets of at most 1,400 bytes
+//   BM_MoldRead          read those packets back in sequence order into a feed (gap and duplicate checks)
 // Each iteration processes the whole stream from the start; the rates are per request, per ITCH
 // message and per byte.
 #include <benchmark/benchmark.h>
@@ -25,6 +27,7 @@
 #include "feed/decoder.hpp"
 #include "feed/encoder.hpp"
 #include "feed/feed_book.hpp"
+#include "feed/moldudp64.hpp"
 #include "lob/apply.hpp"
 #include "lob/events.hpp"
 #include "lob/order_book.hpp"
@@ -203,9 +206,33 @@ void BM_FeedEngineSame(benchmark::State& state) {
   rates(state, r);
 }
 
+void BM_MoldPacketize(benchmark::State& state) {
+  const Recorded& r = recorded();
+  for (auto _ : state) {
+    std::vector<std::byte> packets = feed::mold::packetize(r.feed, feed::mold::PacketizeOptions{});
+    benchmark::DoNotOptimize(packets.data());
+  }
+  rates(state, r);
+}
+
+void BM_MoldRead(benchmark::State& state) {
+  const Recorded& r = recorded();
+  const std::vector<std::byte> packets = feed::mold::packetize(r.feed, feed::mold::PacketizeOptions{});
+  for (auto _ : state) {
+    feed::mold::Reassembler back;
+    back.feed.reserve(r.feed.size());
+    feed::mold::ReadResult res = feed::mold::read_packets(packets, back);
+    if (!res.complete()) state.SkipWithError("the packets did not read back");
+    benchmark::DoNotOptimize(back.feed.data());
+  }
+  rates(state, r);
+}
+
 BENCHMARK(BM_FeedEncode)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_FeedParse)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_FeedParseRebuild)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_FeedEngineSame)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_MoldPacketize)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_MoldRead)->Unit(benchmark::kMillisecond);
 
 }  // namespace

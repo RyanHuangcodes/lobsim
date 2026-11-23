@@ -1,7 +1,8 @@
 # Closed loop of the binary feed (upgrade 6): lobsim_run (fixed seed) -> lobsim_feed check, which
 # must exit 0; then lobsim_feed encode -> decode, which must agree with the check on every message
 # count and on the final book digest, and the file size must equal the fixed message sizes
-# (38 A + 33 E + 25 X + 21 D + 14 S bytes).
+# (38 A + 33 E + 25 X + 21 D + 14 S bytes). Then the feed goes through MoldUDP64 packets and back,
+# byte-identical, and a packet file with one packet left out must report the gap (exit code 2).
 #   cmake -DRUN=<lobsim_run> -DFEED=<lobsim_feed> -DCONFIG=<json> -DSEED=<n> -DDURATION=<s> -DOUT=<dir>
 #         -P feed_closed_loop.cmake
 file(REMOVE_RECURSE "${OUT}")
@@ -50,5 +51,34 @@ math(EXPR want "38 * ${a} + 33 * ${e} + 25 * ${x} + 21 * ${d} + 14 * ${s}")
 file(SIZE "${OUT}/feed.itch" size)
 if(NOT size EQUAL want OR NOT bytes EQUAL want)
   message(FATAL_ERROR "feed size ${size} (reported ${bytes}), expected 38 A + 33 E + 25 X + 21 D + 14 S = ${want}")
+endif()
+
+# MoldUDP64 (F7): packets back to the same feed bytes; a lost packet is a gap (exit code 2).
+execute_process(COMMAND "${FEED}" packetize --feed "${OUT}/feed.itch" --out "${OUT}/feed.mold"
+                RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+message(STATUS "lobsim_feed packetize: exit ${rc}\n${out}${err}")
+if(NOT rc EQUAL 0)
+  message(FATAL_ERROR "lobsim_feed packetize exited with ${rc}")
+endif()
+execute_process(COMMAND "${FEED}" depacketize --packets "${OUT}/feed.mold" --out "${OUT}/feed.back.itch"
+                RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+message(STATUS "lobsim_feed depacketize: exit ${rc}\n${out}${err}")
+if(NOT rc EQUAL 0)
+  message(FATAL_ERROR "lobsim_feed depacketize exited with ${rc}")
+endif()
+file(SHA256 "${OUT}/feed.itch" h1)
+file(SHA256 "${OUT}/feed.back.itch" h2)
+if(NOT h1 STREQUAL h2)
+  message(FATAL_ERROR "the feed rebuilt from the MoldUDP64 packets differs from the feed")
+endif()
+execute_process(COMMAND "${FEED}" packetize --feed "${OUT}/feed.itch" --out "${OUT}/lost.mold" --drop-packet 2
+                RESULT_VARIABLE rc OUTPUT_QUIET ERROR_VARIABLE err)
+if(NOT rc EQUAL 0)
+  message(FATAL_ERROR "lobsim_feed packetize --drop-packet exited with ${rc}: ${err}")
+endif()
+execute_process(COMMAND "${FEED}" depacketize --packets "${OUT}/lost.mold" --out "${OUT}/lost.itch"
+                RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+if(NOT rc EQUAL 2 OR NOT out MATCHES "gap +sequence numbers [0-9]+ to [0-9]+")
+  message(FATAL_ERROR "a lost packet must be reported as a gap with exit code 2 (got ${rc}):\n${out}${err}")
 endif()
 message(STATUS "feed closed loop OK: ${check_line}")

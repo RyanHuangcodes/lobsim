@@ -405,7 +405,7 @@ target_link_libraries(micro_bench PRIVATE lob lobsim_options benchmark::benchmar
 
 # Binary market-data feed (upgrade 6, FEED.md): the ITCH 5.0 tests run inside lob_tests.
 target_sources(lob_tests PRIVATE tests/unit/feed_itch_test.cpp tests/unit/feed_encoder_test.cpp
-  tests/unit/feed_decoder_test.cpp)
+  tests/unit/feed_decoder_test.cpp tests/unit/feed_mold_test.cpp)
 target_link_libraries(lob_tests PRIVATE feed)
 # The seeded differential test also rebuilds the book from the feed and compares digests.
 target_link_libraries(fuzz_diff PRIVATE feed)

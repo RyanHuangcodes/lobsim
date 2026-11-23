@@ -2,6 +2,8 @@
 
 `lobsim_feed` turns every change to the visible book of a lobsim run into a binary market-data feed in the format of Nasdaq TotalView-ITCH 5.0. It then proves the feed is complete: it rebuilds the order book from the bytes alone and checks, after every request, that the rebuilt book equals the engine's.
 
+The feed can also be cut into MoldUDP64 packets, the framing Nasdaq uses to send ITCH over UDP, and read back with gap detection ([below](#moldudp64-packets)).
+
 The feed is a subset of ITCH 5.0. It uses five message types with ITCH's own fixed body layouts, every integer big-endian, and each body preceded by a 2-byte big-endian length. There is no custom header, so any ITCH reader can walk the file. lobsim's parser walks any ITCH 5.0 file framed this way and skips the types it does not use. The decisions behind every rule below are D-300 to D-331 in [DECISIONS.md](DECISIONS.md).
 
 ## Contents
@@ -11,6 +13,7 @@ The feed is a subset of ITCH 5.0. It uses five message types with ITCH's own fix
 - [Hand check](#hand-check)
 - [Running it](#running-it)
 - [How the feed is verified](#how-the-feed-is-verified)
+- [MoldUDP64 packets](#moldudp64-packets)
 - [Measured numbers](#measured-numbers)
 - [Code layout](#code-layout)
 - [Not included](#not-included)
@@ -118,6 +121,30 @@ Other checks, all in CI:
 
 In the default simulator, no order ever trades as a taker and then rests: its noise traders price from their own view of the book, and its market maker is post-only. So a closed-loop simulator run cannot show the canary bug. The canary is checked on the fixture and on the random differential stream instead, which both contain that case (D-327).
 
+## MoldUDP64 packets
+
+```sh
+build/release/lobsim_feed packetize   --feed out/run1/feed.itch --out out/run1/feed.mold [--session LOBSIM] [--max-packet 1400]
+build/release/lobsim_feed depacketize --packets out/run1/feed.mold --out out/run1/feed.back.itch
+```
+
+A MoldUDP64 packet is a 20-byte header followed by its messages:
+
+| Offset | Length | Field | Value in lobsim |
+|---|---|---|---|
+| 0 | 10 | session | `--session`, default `LOBSIM`, padded with spaces |
+| 10 | 8 | sequence number | of the packet's first message; the first message of the session is 1 |
+| 18 | 2 | message count | 1 to 65,534; 0 is a heartbeat; 0xFFFF ends the session |
+| 20 | | message blocks | each a 2-byte length and the message: exactly the framing of the feed file |
+
+`packetize` fills each packet with as many whole messages as fit in `--max-packet` bytes (default 1,400, header included, which keeps a packet inside a 1,500-byte Ethernet frame with room for the IP and UDP headers). It ends with an end-of-session packet whose sequence number is the next one. A file does not keep packet boundaries, so the packet file stores each packet behind its own 2-byte big-endian length. Only `packetize` and `depacketize` use that extra length; there are no sockets.
+
+`depacketize` reads packets in file order and follows the sequence numbers. A number already delivered is a duplicate, such as a retransmission, and is skipped. A jump forward is a gap: the missing range is printed and the run exits with code 2. A jump can show up in a message packet, a heartbeat or the end-of-session packet. A missing end-of-session packet also exits 2. A malformed packet file exits 1 with the byte offset: a truncated packet, a packet shorter than its header, a message that runs past its packet, bytes left after the message count, a change of session, or anything after the end of the session. `packetize --drop-packet K` leaves out the K-th message packet to simulate a loss.
+
+On the default 1-hour run with seed 42, the 364,381 messages go into 8,196 packets, 44.5 messages per packet, plus the end-of-session packet. The 20-byte packet headers add 1.47% to the feed (163,940 bytes); the packet file, with its 2-byte length per packet, is 11,363,186 bytes, 1.61% more than the feed. `depacketize` gives back the feed byte for byte, and `--drop-packet 1000` is reported as the gap 44,151 to 44,196 (46 messages).
+
+The closed-loop tests check the round trip and the reported gap on every run. The unit tests (`tests/unit/feed_mold_test.cpp`) cover a hand-checked packet, the size limit and greedy filling, a lost packet, a loss shown only by the end-of-session packet, a retransmitted packet, heartbeats, the session and first sequence number, and every malformed case. The `fuzz_feed_parse` target also puts the part of each input that parses into packets of a size chosen from the input. It reads them back, requires the same bytes with no gap, and reads the raw input as a packet file.
+
 ## Measured numbers
 
 All on one machine: Intel Xeon Platinum 8488C, 8 vCPU, Linux x86-64, GCC 11.5, Release (`-O3`). Each number is the median of 3 runs, with the load average below 1.1 throughout. The engine's own throughput on the same machine is given for comparison. Apple M4 numbers (where the README's engine benchmarks were measured) are **pending**.
@@ -129,6 +156,8 @@ All on one machine: Intel Xeon Platinum 8488C, 8 vCPU, Linux x86-64, GCC 11.5, R
 | Parse only | `BM_FeedParse`: the whole feed with a handler that does no work | **115.8 million messages/s, 3.34 GiB/s** |
 | Parse + rebuild | `BM_FeedParseRebuild`: the whole feed into a `FeedBook` | **25.8 million messages/s** (27.5 million requests/s), bounded by the book, not the parser |
 | Size | `lobsim_feed encode` on the default 1-hour run, seed 42 (331,640 requests) | **11,182,852 bytes, 33.72 bytes per request**; `orders.log` is 11,100,312 bytes, 33.47 per request |
+| MoldUDP64 packetize | `BM_MoldPacketize`: the whole feed into packets of at most 1,400 bytes | **107.3 million messages/s** (3.09 GiB/s of feed) |
+| MoldUDP64 read | `BM_MoldRead`: those packets back into a feed, with the sequence checks | **94.1 million messages/s** (2.71 GiB/s of feed) |
 | Allocations | `lobsim_bench --feed` (counting global `operator new`), 10,000,000 messages, the first 1,000,000 not counted | **0 per message** in encode and in parse; parse + rebuild 0.013 per message (116,801 `std::map` nodes for new price levels, against 116,800 in the engine on the same messages) |
 
 Encode is 1.8 times the engine's throughput on the same machine, so the feed is never the bottleneck. The size row checks by hand: 38 x 171,237 + 33 x 51,653 + 25 x 0 + 21 x 141,489 + 14 x 2 = 11,182,852. The default run has no X: none of its agents ever reduces an order at the same price.
@@ -149,6 +178,7 @@ build/release/lobsim_feed encode --run out/run1 --out out/run1/feed.itch
 | `include/feed/encoder.hpp`, `src/feed/encoder.cpp` | `feed::Encoder`: the mirror of resting orders and the per-request mapping |
 | `include/feed/decoder.hpp` | `feed::parse` (a template over the handler, so every call inlines) and `feed::Reencoder` |
 | `include/feed/feed_book.hpp`, `src/feed/feed_book.cpp` | `feed::FeedBook` and `feed::book_digest` |
+| `include/feed/moldudp64.hpp` | MoldUDP64: `packetize`, `read_packets` (a template over the handler) and `Reassembler` (header-only) |
 | `apps/feed_main.cpp` | `lobsim_feed` |
 | `tests/unit/feed_*.cpp`, `tests/feed_*.cmake` | unit tests, the closed loop and the canary checks |
 | `fuzz/fuzz_feed_parse.cpp`, `fuzz/feed_parse_driver.*`, `fuzz/make_feed_seeds.py`, `fuzz/corpus/feed_parse/` | the fuzz target, its shared check and its seeds |
@@ -158,4 +188,4 @@ The `feed` library depends on `lob` only, never on `sim`, the same rule `lob` fo
 
 ## Not included
 
-These are deliberately left out: networking and MoldUDP64 packets (optional phase F7, not built), a live feed from inside the simulator, message types other than S, A, E, X and D, a custom file header, and `mmap` or SIMD (a run's feed is a few MB, and a plain read is already memory-bound). No real Nasdaq ITCH file is in the repository, and nothing here claims results on real data.
+These are deliberately left out: networking (MoldUDP64 packets exist, but only in files and memory, with no sockets and no retransmission requests), a live feed from inside the simulator, message types other than S, A, E, X and D, a custom file header, and `mmap` or SIMD (a run's feed is a few MB, and a plain read is already memory-bound). No real Nasdaq ITCH file is in the repository, and nothing here claims results on real data.

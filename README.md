@@ -42,7 +42,7 @@ A limit order book, matching engine and agent-based trading simulator in C++20, 
 | 2 | LOBSTER replayer and matching-agreement check | Done; real-data run pending data access |
 | 2b | Dress rehearsal on synthetic LOBSTER-like days, with audit and CI test | Done |
 | 4 | Replay dashboard, deployed to GitHub Pages | Done |
-| 6 | Binary market-data feed (ITCH 5.0): encoder, decoder, book rebuilt from the feed, fuzzing, canary | Done |
+| 6 | Binary market-data feed (ITCH 5.0): encoder, decoder, book rebuilt from the feed, fuzzing, canary, MoldUDP64 packets | Done |
 | 3 | Calibration, and an informed trader that reacts to the size of the mispricing | Next |
 | | Reinforcement-learning environment, multithreading | Planned |
 
@@ -473,7 +473,7 @@ Before writing a bundle, `lobsim_viz_export` rebuilds the book from `orders.log`
 
 ## Binary market-data feed
 
-`lobsim_feed` writes every change to a run's visible book as a Nasdaq TotalView-ITCH 5.0 feed: five message types (S, A, E, X, D) with ITCH's own big-endian layouts, each framed by a 2-byte length, so any ITCH reader can walk it. `lobsim_feed check --run <dir>` rebuilds the book from the feed bytes alone. After every request it compares that book's best prices and top 10 levels with the engine's, and every 10,000 requests and at the end the full book. It also checks the executions against the engine's trades and that the parsed messages re-encode to the same bytes. The default 1-hour run checks clean: 331,640 requests become 11,182,852 bytes, 33.72 per request.
+`lobsim_feed` writes every change to a run's visible book as a Nasdaq TotalView-ITCH 5.0 feed: five message types (S, A, E, X, D) with ITCH's own big-endian layouts, each framed by a 2-byte length, so any ITCH reader can walk it. `lobsim_feed check --run <dir>` rebuilds the book from the feed bytes alone. After every request it compares that book's best prices and top 10 levels with the engine's, and every 10,000 requests and at the end the full book. It also checks the executions against the engine's trades and that the parsed messages re-encode to the same bytes. The default 1-hour run checks clean: 331,640 requests become 11,182,852 bytes, 33.72 per request. `lobsim_feed packetize` and `depacketize` carry the feed in MoldUDP64 packets (file and memory only), and the reader reports every gap in the sequence numbers.
 
 On an Intel Xeon 8488C (Release, median of 3 runs), encoding runs at 47.2 million requests/s, 1.8 times the engine on the same machine. Parsing runs at 3.34 GiB/s. Neither makes a heap allocation per message. Apple M4 numbers are pending. Format, mapping rules, verification and every measurement: [FEED.md](FEED.md).
 

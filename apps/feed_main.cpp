@@ -10,6 +10,14 @@
 //       (best prices and the top 10 levels per side), every 10,000 requests and at the end that their
 //       digests agree, that the executions equal the engine's trades, and that re-encoding the parsed
 //       messages gives the same bytes. Writes no file.
+//   lobsim_feed packetize --feed <feed file> --out <packet file> [--session NAME] [--max-packet N]
+//                         [--drop-packet K]
+//       group the messages into MoldUDP64 packets of at most N bytes (default 1,400, header included),
+//       sequence numbers from 1, then an end-of-session packet. --drop-packet leaves out the K-th
+//       message packet, to simulate a loss.
+//   lobsim_feed depacketize --packets <packet file> --out <feed file>
+//       read the packets in sequence order, skip duplicates, report every gap, and write the feed
+//       back out. Exit code 2 if a message is missing or the session never ended.
 //
 // Every subcommand prints one summary line, "feed: S <n> A <n> E <n> X <n> D <n> bytes <n> digest <hex>".
 // Exit codes, as for the LOBSTER tools: 0 done (every check passed), 1 bad arguments or bad input
@@ -38,6 +46,7 @@
 #include "feed/encoder.hpp"
 #include "feed/feed_book.hpp"
 #include "feed/itch.hpp"
+#include "feed/moldudp64.hpp"
 #include "lob/apply.hpp"
 #include "lob/events.hpp"
 #include "lob/order_book.hpp"
@@ -53,7 +62,10 @@ int usage(const std::string& why) {
   std::fprintf(stderr,
                "usage: lobsim_feed encode --run <sim output dir> --out <feed file>\n"
                "       lobsim_feed decode --feed <feed file> [--depth N]\n"
-               "       lobsim_feed check --run <sim output dir>\n");
+               "       lobsim_feed check --run <sim output dir>\n"
+               "       lobsim_feed packetize --feed <feed file> --out <packet file> [--session NAME]\n"
+               "                             [--max-packet N] [--drop-packet K]\n"
+               "       lobsim_feed depacketize --packets <packet file> --out <feed file>\n");
   return 1;
 }
 
@@ -315,6 +327,65 @@ int check(const std::string& run_dir) {
   return 0;
 }
 
+// ---------------------------------------------------------------- MoldUDP64 packets (F7)
+
+void write_file(const std::string& path, std::span<const std::byte> bytes) {
+  std::FILE* f = std::fopen(path.c_str(), "wb");
+  if (f == nullptr) throw BadInput{"cannot write " + path};
+  const bool ok = std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
+  if (std::fclose(f) != 0 || !ok) throw BadInput{"error writing " + path};
+}
+
+int packetize(const std::string& feed_path, const std::string& out_path, const feed::mold::PacketizeOptions& opt) {
+  const std::vector<std::byte> feed_bytes = read_file(feed_path);
+  feed::mold::PacketizeStats st;
+  std::vector<std::byte> packets;
+  try {
+    packets = feed::mold::packetize(feed_bytes, opt, &st);
+  } catch (const feed::mold::PacketizeError& e) {
+    throw BadInput{feed_path + ": " + e.what()};
+  }
+  write_file(out_path, packets);
+  const double per = st.packets > 0 ? static_cast<double>(st.messages - st.dropped_messages) / static_cast<double>(st.packets) : 0.0;
+  std::printf("messages             %" PRIu64 " in %" PRIu64 " packets (%.1f per packet, at most %zu bytes each)\n",
+              st.messages - st.dropped_messages, st.packets, per, opt.max_packet);
+  if (opt.drop_packet != 0) {
+    std::printf("dropped              packet %" PRIu64 ": %" PRIu64 " messages (a simulated loss)\n", opt.drop_packet,
+                st.dropped_messages);
+  }
+  std::printf("bytes                %" PRIu64 " (feed %zu; packet overhead %.2f%%)\n", st.bytes, feed_bytes.size(),
+              feed_bytes.empty() ? 0.0 : 100.0 * (static_cast<double>(st.bytes) / static_cast<double>(feed_bytes.size()) - 1.0));
+  std::printf("session              %s, end-of-session packet at sequence %" PRIu64 "\n",
+              feed::mold::to_string(opt.session).c_str(), opt.first_sequence + st.messages);
+  std::printf("wrote                %s\n", out_path.c_str());
+  return 0;
+}
+
+int depacketize(const std::string& packets_path, const std::string& out_path) {
+  const std::vector<std::byte> file = read_file(packets_path);
+  feed::mold::Reassembler re;
+  const feed::mold::ReadResult r = feed::mold::read_packets(file, re);
+  if (!r.ok()) {
+    throw BadInput{packets_path + ": " + feed::mold::to_string(r.error) + " at byte offset " + std::to_string(r.offset)};
+  }
+  write_file(out_path, re.feed);
+  std::printf("session              %s\n", feed::mold::to_string(r.session).c_str());
+  std::printf("packets              %" PRIu64 " (%" PRIu64 " heartbeats)%s\n", r.packets, r.heartbeats,
+              r.ended ? ", ended by an end-of-session packet" : ", NO end-of-session packet");
+  std::printf("messages             %" PRIu64 " delivered, %" PRIu64 " duplicates skipped, %" PRIu64 " missing\n",
+              r.messages, r.duplicates, r.missing());
+  for (const feed::mold::Gap& g : r.gaps) {
+    std::printf("gap                  sequence numbers %" PRIu64 " to %" PRIu64 " (%" PRIu64 " messages)\n", g.first,
+                g.last, g.last - g.first + 1);
+  }
+  std::printf("wrote                %s (%zu bytes)\n", out_path.c_str(), re.feed.size());
+  if (!r.complete()) {
+    throw Mismatch{packets_path + ": " + (r.gaps.empty() ? std::string("the session never ended")
+                                                         : std::to_string(r.missing()) + " messages are missing")};
+  }
+  return 0;
+}
+
 std::optional<std::size_t> parse_size(std::string_view s) {
   std::size_t v = 0;
   const auto [p, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
@@ -327,18 +398,35 @@ std::optional<std::size_t> parse_size(std::string_view s) {
 int main(int argc, char** argv) {
   if (argc < 2) return usage("a subcommand is required");
   const std::string cmd = argv[1];
-  std::string run_dir, out_path, feed_path;
+  std::string run_dir, out_path, feed_path, packets_path;
   std::size_t depth = 5;
+  feed::mold::PacketizeOptions mold_opt;
   for (int i = 2; i < argc; i += 2) {
     const std::string a = argv[i];
     if (i + 1 >= argc) return usage(a + " needs a value");
     const std::string v = argv[i + 1];
     if (a == "--run" && (cmd == "encode" || cmd == "check")) {
       run_dir = v;
-    } else if (a == "--out" && cmd == "encode") {
+    } else if (a == "--out" && (cmd == "encode" || cmd == "packetize" || cmd == "depacketize")) {
       out_path = v;
-    } else if (a == "--feed" && cmd == "decode") {
+    } else if (a == "--feed" && (cmd == "decode" || cmd == "packetize")) {
       feed_path = v;
+    } else if (a == "--packets" && cmd == "depacketize") {
+      packets_path = v;
+    } else if (a == "--session" && cmd == "packetize") {
+      const auto s = feed::mold::make_session(v);
+      if (!s) return usage("--session must be 1 to 10 printable characters without spaces");
+      mold_opt.session = *s;
+    } else if (a == "--max-packet" && cmd == "packetize") {
+      const auto m = parse_size(v);
+      if (!m || *m < feed::mold::kHeader + feed::kPrefix + 1 || *m > 0xFFFF) {
+        return usage("--max-packet must be between 23 and 65535");
+      }
+      mold_opt.max_packet = *m;
+    } else if (a == "--drop-packet" && cmd == "packetize") {
+      const auto k = parse_size(v);
+      if (!k || *k == 0) return usage("--drop-packet must be a positive integer");
+      mold_opt.drop_packet = *k;
     } else if (a == "--depth" && cmd == "decode") {
       const auto d = parse_size(v);
       if (!d || *d == 0) return usage("--depth must be a positive integer");
@@ -359,6 +447,14 @@ int main(int argc, char** argv) {
     if (cmd == "check") {
       if (run_dir.empty()) return usage("check needs --run");
       return check(run_dir);
+    }
+    if (cmd == "packetize") {
+      if (feed_path.empty() || out_path.empty()) return usage("packetize needs --feed and --out");
+      return packetize(feed_path, out_path, mold_opt);
+    }
+    if (cmd == "depacketize") {
+      if (packets_path.empty() || out_path.empty()) return usage("depacketize needs --packets and --out");
+      return depacketize(packets_path, out_path);
     }
     return usage("unknown subcommand " + cmd);
   } catch (const Mismatch& m) {

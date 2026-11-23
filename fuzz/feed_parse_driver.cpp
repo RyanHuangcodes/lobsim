@@ -6,9 +6,11 @@
 #include <exception>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include "feed/decoder.hpp"
 #include "feed/feed_book.hpp"
+#include "feed/moldudp64.hpp"
 
 namespace lob::fuzz {
 namespace {
@@ -38,6 +40,30 @@ void run_feed_parse(const std::uint8_t* data, std::size_t size) {
     die(r.ok() ? "parse then re-encode is not byte-identical" : "the messages before the error do not round-trip",
         good);
   }
+
+  // MoldUDP64 (F7): the part that parsed goes into packets and back unchanged, with no gap, at a
+  // packet size picked from the input; and the input read as a packet file never crashes.
+  const std::span<const std::byte> parsed = in.first(good);
+  std::size_t largest = 0;  // the largest message block, so the packet size limit fits it
+  for (std::size_t at = 0; at < parsed.size();) {
+    const std::size_t block = feed::kPrefix + feed::be::load<std::uint16_t>(parsed.data() + at);
+    largest = std::max(largest, block);
+    at += block;
+  }
+  if (feed::mold::kHeader + largest <= 0xFFFF) {  // a longer message cannot fit in any packet
+    feed::mold::PacketizeOptions mopt;
+    mopt.max_packet = std::max<std::size_t>(60 + (size > 0 ? data[0] : 0) * 8, feed::mold::kHeader + largest);
+    const std::vector<std::byte> packets = feed::mold::packetize(parsed, mopt);
+    feed::mold::Reassembler back;
+    const feed::mold::ReadResult mr = feed::mold::read_packets(packets, back);
+    if (!mr.complete() || back.feed.size() != parsed.size() ||
+        !std::equal(back.feed.begin(), back.feed.end(), parsed.begin())) {
+      die("feed -> MoldUDP64 packets -> feed is not byte-identical", good);
+    }
+  }
+  feed::mold::Reassembler any;
+  const feed::mold::ReadResult ar = feed::mold::read_packets(in, any);
+  if (ar.offset > size) die("MoldUDP64 error offset beyond the input", ar.offset);
 
   feed::FeedBook book(0, kFuzzMaxRef);
   const feed::ParseResult b = feed::parse(in, book);
