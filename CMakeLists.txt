@@ -380,3 +380,20 @@ add_test(NAME lobsim_bench_smoke COMMAND lobsim_bench --messages 20000 --ref-mes
 
 add_executable(micro_bench bench/micro_bench.cpp)
 target_link_libraries(micro_bench PRIVATE lob lobsim_options benchmark::benchmark_main)
+
+# The market fingerprint (upgrade 3, C4): one statistics module for LOBSTER data and exported simulations.
+add_library(fingerprint STATIC src/calib/fingerprint.cpp src/calib/fingerprint_stats.cpp)
+target_include_directories(fingerprint PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(fingerprint PUBLIC replay lob calibfile nlohmann_json::nlohmann_json PRIVATE lobsim_options)
+add_executable(lobsim_fingerprint apps/fingerprint_main.cpp)
+target_link_libraries(lobsim_fingerprint PRIVATE fingerprint lobsim_options)
+add_test(NAME lobster_price_scale
+  COMMAND ${CMAKE_COMMAND}
+    -DEXPORT=$<TARGET_FILE:lobsim_export_lobster>
+    -DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/lobster_export
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/lobster_price_scale
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/lobster_price_scale.cmake)
+add_executable(fingerprint_tests tests/unit/fingerprint_test.cpp)
+target_link_libraries(fingerprint_tests PRIVATE fingerprint lobsim_options GTest::gtest_main)
+target_compile_definitions(fingerprint_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+gtest_discover_tests(fingerprint_tests)

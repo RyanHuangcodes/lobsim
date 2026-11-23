@@ -38,6 +38,12 @@
 // --no-filter-window keeps every message, --no-halt leaves the halt out and --hidden-rate 0 the
 // hidden executions (all three only with --lobster-like).
 //
+// --price-scale N (default 1) multiplies every real price written (messages and orderbook rows) by N, so
+// simulator prices land in the units of the data they are compared with (N = the data's tick in LOBSTER
+// price units). The empty-level placeholders (9999999999, -9999999999, 0) and the halt's price -1 are not
+// scaled. An N for which the largest price the run can reach, times N, would reach 9999999999 is refused.
+// --audit lines keep the simulator's own (unscaled) prices.
+//
 // --audit <file> (off by default) writes the exporter's ground truth: one CSV line per message it
 // derived, written or not, in order: seq,sim_time_ns,type,id,size,price,direction,status,line.
 // status is written, filtered (outside the window before and after), before_window or injected
@@ -94,14 +100,15 @@ int usage(const std::string& why) {
                "usage: lobsim_export_lobster --run <sim output dir> --levels L [--filter-window] --out <dir> "
                "[--ticker NAME]\n"
                "       [--lobster-like [--window-start-s S] [--hidden-rate R] [--halt-at-s H] [--seed N]\n"
-               "                       [--no-filter-window] [--no-halt]] [--audit FILE]\n");
+               "                       [--no-filter-window] [--no-halt]] [--audit FILE] [--price-scale N]\n");
   return 1;
 }
 
 class Exporter {
  public:
   Exporter(lob::Price max_price, int levels, bool filter, std::ostream& messages, std::ostream& orderbook,
-           const LikeOptions& like = {}, std::int64_t window_end_ns = 0, std::ostream* audit = nullptr)
+           const LikeOptions& like = {}, std::int64_t window_end_ns = 0, std::ostream* audit = nullptr,
+           std::int64_t price_scale = 1)
       : engine_(lob::BookConfig{max_price}),
         mirror_(lob::BookConfig{max_price}),
         levels_(static_cast<std::size_t>(levels)),
@@ -110,7 +117,8 @@ class Exporter {
         orderbook_(orderbook),
         like_(like),
         rng_(like.seed),
-        audit_(audit) {
+        audit_(audit),
+        price_scale_(price_scale) {
     if (audit_ != nullptr) *audit_ << "seq,sim_time_ns,type,id,size,price,direction,status,line\n";
     if (like_.on) {
       halt_done_ = !like_.halt;
@@ -224,7 +232,8 @@ class Exporter {
   void write_injected(std::int64_t at_ns, int type, std::int64_t id, std::int64_t size, std::int64_t price,
                       int direction) {
     time_ = at_ns;
-    const replay::LobsterMsg m{kOpenNs + (at_ns - like_.window_start_ns), type, id, size, price, direction};
+    const replay::LobsterMsg m{kOpenNs + (at_ns - like_.window_start_ns), type, id,
+                               size, type == 7 ? price : price * price_scale_, direction};
     messages_ << replay::format_message_line(m) << '\n';
     if (last_row_.empty()) last_row_ = book_row();
     orderbook_ << last_row_ << '\n';
@@ -249,9 +258,11 @@ class Exporter {
     std::string row;
     for (std::size_t i = 0; i < levels_; ++i) {
       if (i > 0) row += ',';
-      row += i < asks.size() ? std::to_string(asks[i].price) + ',' + std::to_string(asks[i].total_qty) : empty_ask;
+      row += i < asks.size() ? std::to_string(asks[i].price * price_scale_) + ',' + std::to_string(asks[i].total_qty)
+                             : empty_ask;
       row += ',';
-      row += i < bids.size() ? std::to_string(bids[i].price) + ',' + std::to_string(bids[i].total_qty) : empty_bid;
+      row += i < bids.size() ? std::to_string(bids[i].price * price_scale_) + ',' + std::to_string(bids[i].total_qty)
+                             : empty_bid;
     }
     return row;
   }
@@ -297,7 +308,7 @@ class Exporter {
     }
     if (like_.on && static_cast<std::int64_t>(id) >= kHiddenIdBase) fail("order id " + std::to_string(id) + " is in the hidden-id range");
     const std::int64_t shown_ns = like_.on ? kOpenNs + (time_ - like_.window_start_ns) : kOpenNs + time_;
-    const replay::LobsterMsg m{shown_ns, type, static_cast<std::int64_t>(id), size, price, direction};
+    const replay::LobsterMsg m{shown_ns, type, static_cast<std::int64_t>(id), size, price * price_scale_, direction};
     messages_ << replay::format_message_line(m) << '\n';
     last_row_ = book_row();
     orderbook_ << last_row_ << '\n';
@@ -347,6 +358,7 @@ class Exporter {
   std::uint64_t halts_written_{0};
   std::uint64_t before_window_{0};
   std::ostream* audit_;
+  std::int64_t price_scale_;
   std::uint64_t audit_seq_{0};
 };
 
@@ -413,6 +425,7 @@ int main(int argc, char** argv) {
   std::string audit_path;
   bool filter = false;
   bool no_filter = false;
+  std::int64_t price_scale = 1;
   LikeOptions like;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
@@ -460,6 +473,11 @@ int main(int argc, char** argv) {
       like.hidden_rate = std::strtod(text.c_str(), &end);
       if (text.empty() || end != text.c_str() + text.size() || !(like.hidden_rate >= 0.0) || like.hidden_rate > 1e6) {
         return usage("--hidden-rate must be a number from 0 to 1000000 (per second)");
+      }
+    } else if (a == "--price-scale") {
+      const auto [p, ec] = std::from_chars(v.data(), v.data() + v.size(), price_scale);
+      if (v.empty() || ec != std::errc{} || p != v.data() + v.size() || price_scale < 1) {
+        return usage("--price-scale must be a positive integer");
       }
     } else if (a == "--seed") {
       const auto [p, ec] = std::from_chars(v.data(), v.data() + v.size(), like.seed);
@@ -522,8 +540,13 @@ int main(int argc, char** argv) {
       if (!audit) throw std::runtime_error("cannot write " + audit_path);
     }
     sim::OrderLogReader reader(log);
+    if (reader.max_price() > 0 && price_scale > (kEmptyAsk - 1) / static_cast<std::int64_t>(reader.max_price())) {
+      throw std::runtime_error("--price-scale " + std::to_string(price_scale) + " is too large: the run's largest price " +
+                               std::to_string(reader.max_price()) + " times it must stay below " +
+                               std::to_string(kEmptyAsk));
+    }
     Exporter exporter(reader.max_price(), levels, filter, messages, orderbook, like, window_end_ns,
-                      audit_path.empty() ? nullptr : &audit);
+                      audit_path.empty() ? nullptr : &audit, price_scale);
     while (const auto r = reader.next()) exporter.request(*r);
     exporter.finish();
     messages.flush();
