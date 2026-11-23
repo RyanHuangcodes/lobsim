@@ -14,7 +14,7 @@
 #   unfiltered_L10  --no-filter-window at L = 10: no message is hidden, but an order more than ten
 #                   levels deep counts as having left the window, so the level limit is the only
 #                   difference from "unfiltered". Reported, not part of the exit code: its deepest
-#                   lifetime bucket cannot be measured (see docs/parameter_recovery.md).
+#                   lifetime bucket cannot be measured (see CALIBRATION.md section 5).
 # All keep the lobster-like window start (300 s of warm-up), hidden executions and the halt; the
 # estimator ignores types 5 and 7. Writes <out>/<variant>/compare.md and prints the tables.
 # Exit codes: 0 both judged comparisons passed, 2 one failed, 1 anything else went wrong.

@@ -76,7 +76,7 @@ struct ValidateOptions {
   std::string calibration_file;            // non-empty: use it, skip the estimation
   std::optional<std::int64_t> start_price; // default: the calibration's median_mid_ticks
   double warmup_s{300.0};                  // simulated before the exported (measured) window
-  std::uint32_t owner_count{50};
+  std::uint32_t owner_count{10'000};
   int threads{0};                          // 0: min(hardware threads, 8)
   int bootstrap_resamples{1000};
   bool keep_exports{false};                // keep the first seed's exported files under <out>/exports/

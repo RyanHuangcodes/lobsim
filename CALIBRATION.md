@@ -119,11 +119,160 @@ Messages naming an order that is not tracked are counted in three classes (after
 
 **Fallbacks when the local book is not two-sided** (D-325). Own side present, other side absent: the reference is the own best, the bucket is `3+`, and nothing can cross (counted `fallback_one_sided`). Own side absent, other side present: the reference is the other best $\mp$ 1 tick, a virtual spread of 1 (bucket `1`, bound 0). Empty book: the reference is the start price, bucket `1`, bound 0 (`fallback_empty`). In addition, when the bucket the agent is in has no samples for that side, the agent uses the **nearest non-empty bucket** (decision D-385; it is what lets a calibration from a day that never visited one spread bucket still run). Tests: `CalibratedFlow.EmptyBookUsesTheStartPriceAndIsCounted`, `OneSidedBookFallbacks`.
 
-**Several owner ids.** One agent sends the whole flow under `owner_count` owner ids (default 50, used in turn), so that self-trade prevention almost never triggers. The simulator gives the agent its own id plus extra ids from $2^{30}$ upwards, so no existing agent's id, event order or hash changes. Private events for an extra id go to the agent, and a cancel carries the owner of the order's placement (D-323). The agent runs after every other agent and has its own random stream role (D-324). The exported order log works with the exporter and the replayer unchanged (`calibrated_flow_closed_loop`).
+**Several owner ids.** One agent sends the whole flow under `owner_count` owner ids (default 50, used in turn), meant to make self-trade prevention almost never trigger. **50 is not enough for that** (measured in section 5: at 50, 6.3% of aggressive orders are truncated), so `lobsim_calibrate validate` and `configs/calibrated.json` use 10,000; the configuration default stays 50 (D-393). The simulator gives the agent its own id plus extra ids from $2^{30}$ upwards, so no existing agent's id, event order or hash changes. Private events for an extra id go to the agent, and a cancel carries the owner of the order's placement (D-323). The agent runs after every other agent and has its own random stream role (D-324). The exported order log works with the exporter and the replayer unchanged (`calibrated_flow_closed_loop`).
 
 ## 5. Parameter recovery
 
-<!-- C3 RECOVERY SECTION -->
+**SYNTHETIC. Everything in this section describes simulations of a hand-made calibration, not market data.**
+
+The estimator is checked before anything is estimated from data: choose the parameters ourselves, simulate them, estimate them back, and compare. The one committed truth is `calibration/recovery_truth.json`, in the same schema as an estimate, so the simulator reads it exactly as it would read a real calibration.
+
+### The truth
+
+`tools/make_recovery_truth.py` writes the file (`--check` verifies that the committed one is up to date, a ctest entry). Both sides are alike.
+
+| Input | Value |
+|---|---|
+| Rates | 40 limit and 4 aggressive orders per second, half on each side |
+| Placement, s = 1 | P(Δ) ∝ (1 + Δ)^-1.6 on Δ = 0..30 (s = 1 allows no Δ < 0) |
+| Placement, s = 2 | 90% of the mass on that law, 10% at Δ = -1 |
+| Placement, s ≥ 3 | 90% on that law, 10% spread uniformly over Δ = -1..-4 |
+| Lifetimes (every distance bucket) | S(t) = 0.3·1[t < 0.5 s] + 0.7·e^(-t / 20 s), then S = 0 at 600 s so every order gets a cancel |
+| Limit sizes | 100 (40%), 200 (20%), 300 (10%), 500 (10%), 1000 (5%), and 15% odd lots on 1, 10, 20, 25, 50, 75, 99; mean 217 |
+| Aggressive sizes | 100 (15%), 500 (20%), 1000 (30%), 2000 (15%), 5000 (5%), and the same 15% odd lots; mean 972 |
+
+Weights are integers at a scale of 10^9, rounded half up. The survival grid is 10 ms wide around the median and coarse in the far tail; the median on the grid is 6.730 s against the exact 20·ln(1.4) = 6.7294 s (+0.008%).
+
+Two of these choices were made after looking at the simulated market, because the first attempt could not test what it was meant to test:
+
+- **Aggressive sizes.** With aggressive orders sized like limit orders, the price never moved: 20 minutes at a 1-tick spread, zero samples outside the s = 1 bucket. Six size distributions were tried (short runs), looking at the spread and the number of samples per spread bucket; the one above is the first that fills all three buckets without the spread running away (median 1 tick, 90th percentile 4). The choice decides what is tested, not whether it passes.
+- **10,000 owner ids** in `configs/calibrated.json` (the default is 50). One agent produces the whole flow, and a market order that meets a resting order of its own id is cut short by self-trade prevention. Measured directly, with the same seed and nothing else changed:
+
+| `owner_count` | aggressive-size TV (tolerance 0.02) | aggressive orders with a size that is not in the truth | λ_M error (buy, sell) |
+|---|---|---|---|
+| 50 (the default) | **0.066, fails** | 6.3% | -1.6%, -1.9% |
+| 10,000 | 0.0045 | 0.03% | +0.2%, +1.2% |
+
+So with the default, self-trade prevention is not rare in a market like this one. Anything that simulates a calibrated flow with the default 50 should expect truncated aggressive orders.
+
+### How the estimate is compared
+
+`lobsim_calibrate compare` applies the rules of the specification: rates within 3%; placement total variation (TV) ≤ 0.03 per side for each spread bucket with at least 2,000 estimated samples; size TV ≤ 0.02; lifetime medians within 10% per distance bucket (20% filtered).
+
+- **Placement is compared like with like.** The simulator redraws a Δ below -(s - 1), so the truth is first restricted to the bucket's allowed range, [0, ∞) for s = 1 and [-1, ∞) for s = 2, and renormalized. The s ≥ 3 bucket mixes spreads with different ranges; it is compared with the s = 3 range [-2, ∞) and reported only.
+- **Filtered:** rates are reported as biases. Placement is compared on Δ up to the 95th percentile of the window depth: per side, over the rows where that side shows all L levels, the distance in ticks from the best to the L-th level, by nearest rank. The share of each bucket above it is reported.
+- A bucket with too few samples is *skipped*, not passed. A lifetime curve that never reaches 0.5 *fails*.
+
+### Results: 2 hours, unfiltered, L = 40
+
+`scripts/run_recovery.sh` (seed 20240101, 7,200 s window after 300 s of warm-up, hidden executions and the halt left on because the estimator ignores types 5 and 7; 21 s for all variants in a release build). All unfiltered tolerances pass:
+
+| check | truth | estimate | value | tolerance | verdict |
+|---|---|---|---|---|---|
+| rate: limit buy | 20.000 /s | 20.024 /s (144171) | relative error 0.12% | ≤ 3.00% | PASS |
+| rate: limit sell | 20.000 /s | 19.965 /s (143750) | relative error -0.17% | ≤ 3.00% | PASS |
+| rate: aggressive buy | 2.000 /s | 2.004 /s (14431) | relative error 0.22% | ≤ 3.00% | PASS |
+| rate: aggressive sell | 2.000 /s | 2.024 /s (14574) | relative error 1.21% | ≤ 3.00% | PASS |
+| placement: buy s=1 | truth on [0, inf], renormalized | 101555 samples | TV 0.0050 | ≤ 0.0300 | PASS |
+| placement: buy s=2 | truth on [-1, inf], renormalized | 16678 samples | TV 0.0061 | ≤ 0.0300 | PASS |
+| placement: buy s=3+ | truth on [-2, inf], renormalized | 25928 samples | TV 0.0271 | - | info |
+| placement: sell s=1 | truth on [0, inf], renormalized | 100877 samples | TV 0.0040 | ≤ 0.0300 | PASS |
+| placement: sell s=2 | truth on [-1, inf], renormalized | 16966 samples | TV 0.0177 | ≤ 0.0300 | PASS |
+| placement: sell s=3+ | truth on [-2, inf], renormalized | 25898 samples | TV 0.0279 | - | info |
+| size: limit_size | 12 values | 287921 samples | TV 0.0027 | ≤ 0.0200 | PASS |
+| size: aggressive_size | 12 values | 29005 samples | TV 0.0045 | ≤ 0.0200 | PASS |
+| lifetime median: <=0 | 6.730 s | 6.720 s | relative error -0.15% | ≤ 10.00% | PASS |
+| lifetime median: 1-2 | 6.730 s | 6.770 s | relative error 0.59% | ≤ 10.00% | PASS |
+| lifetime median: 3-9 | 6.730 s | 6.590 s | relative error -2.08% | ≤ 10.00% | PASS |
+| lifetime median: >=10 | 6.730 s | 6.640 s | relative error -1.34% | ≤ 10.00% | PASS |
+| fit: buy | delta0 1.000, mu 0.600 | delta0 1.019, mu 0.609 | mu difference 0.0088 | - | info |
+| fit: sell | delta0 1.000, mu 0.600 | delta0 1.000, mu 0.598 | mu difference -0.0021 | - | info |
+
+`result: PASS (14 passed, 0 failed, 4 informational, 0 skipped)`
+
+**Is it luck of the seed?** Ten more seeds (1-10), two hours each: all 14 judged checks pass in 10 of 10.
+
+| Lifetime bucket | mean error of the median over 10 seeds | standard deviation | standard error of the mean |
+|---|---|---|---|
+| ≤ 0 | -0.09% | 1.39% | 0.44% |
+| 1-2 | +0.55% | 1.33% | 0.42% |
+| 3-9 | +0.16% | 1.25% | 0.40% |
+| ≥ 10 | +0.31% | 1.44% | 0.46% |
+
+Pooling the placement counts of those ten runs tests for a small systematic difference, which a tolerance cannot:
+
+| Bucket | pooled samples | pooled TV | TV of exact sampling (mean) | χ² p-value |
+|---|---|---|---|---|
+| buy, s = 1 | 1,033,746 | 0.0012 | 0.0013 | 0.60 |
+| buy, s = 2 | 163,190 | 0.0032 | 0.0034 | 0.24 |
+| sell, s = 1 | 1,034,361 | 0.0015 | 0.0013 | 0.73 |
+| sell, s = 2 | 163,808 | 0.0034 | 0.0034 | 0.73 |
+
+The estimated placement is indistinguishable from exact sampling of the truth.
+
+**Why L = 40.** The published window is what the censoring rule looks at: an order priced worse than the L-th level is censored. Here almost every tick is occupied, so with L = 10 an order 10 or more ticks behind the best is outside the window the moment it is submitted. At L = 40 the window holds (almost) the whole book and no judged bucket loses more than 76 orders. The same day exported with `--no-filter-window` at **L = 10** fails one check:
+
+| check | truth | estimate | value | tolerance | verdict |
+|---|---|---|---|---|---|
+| lifetime median: <=0 | 6.730 s | 6.720 s | relative error -0.15% | ≤ 10.00% | PASS |
+| lifetime median: 1-2 | 6.730 s | 6.770 s | relative error 0.59% | ≤ 10.00% | PASS |
+| lifetime median: 3-9 | 6.730 s | 6.590 s | relative error -2.08% | ≤ 10.00% | PASS |
+| lifetime median: >=10 | 6.730 s | 7.840 s | relative error 16.49% | ≤ 10.00% | FAIL |
+
+`result: FAIL (13 passed, 1 failed, 4 informational, 0 skipped)`
+
+In the ≥ 10 bucket 26,374 of 26,591 orders are censored at once and 198 cancellations are left. Over the ten seeds its median is off by +10.3% on average with a standard deviation of 26.4% (standard error 8.4%) on 153-255 cancellations, and only 2 of 10 runs pass: too few events to show a bias or to rule one out. This is what the choice of L decides, so it is stated here rather than hidden: **at L = 10 the lifetime of deep orders cannot be estimated from two hours of this market.** A real L = 10 file of a stock whose book is as dense would share the limit.
+
+### Results: filtered, L = 10
+
+The export real data resembles: the price-window filter at L = 10. The rates and the tails are biases to be measured; the judged rows use the filtered rules and all pass on this seed (the ≥ 10 median passes its 20% rule on 198 cancellations, which is luck as much as accuracy: see above).
+
+| check | truth | estimate | value | tolerance | verdict |
+|---|---|---|---|---|---|
+| rate: limit buy | 20.000 /s | 18.230 /s (131255) | relative bias -8.85% | - | info |
+| rate: limit sell | 20.000 /s | 18.181 /s (130902) | relative bias -9.10% | - | info |
+| rate: aggressive buy | 2.000 /s | 2.004 /s (14431) | relative bias 0.22% | - | info |
+| rate: aggressive sell | 2.000 /s | 2.024 /s (14574) | relative bias 1.21% | - | info |
+| placement: buy s=1 | truth on [0, 10], renormalized | 92248 samples | TV 0.0100 | ≤ 0.0300 | PASS |
+| placement tail: buy s=1 Delta>10 | 8.41% | 0.05% | relative bias -99.37% | - | info |
+| placement: buy s=2 | truth on [-1, 10], renormalized | 15281 samples | TV 0.0097 | ≤ 0.0300 | PASS |
+| placement tail: buy s=2 Delta>10 | 7.57% | 0.05% | relative bias -99.40% | - | info |
+| placement: buy s=3+ | truth on [-2, 10], renormalized | 23620 samples | TV 0.0245 | - | info |
+| placement tail: buy s=3+ Delta>10 | 7.97% | 0.17% | relative bias -97.88% | - | info |
+| placement: sell s=1 | truth on [0, 11], renormalized | 91549 samples | TV 0.0190 | ≤ 0.0300 | PASS |
+| placement tail: sell s=1 Delta>11 | 7.51% | 0.04% | relative bias -99.45% | - | info |
+| placement: sell s=2 | truth on [-1, 11], renormalized | 15501 samples | TV 0.0189 | ≤ 0.0300 | PASS |
+| placement tail: sell s=2 Delta>11 | 6.76% | 0.06% | relative bias -99.14% | - | info |
+| placement: sell s=3+ | truth on [-2, 11], renormalized | 23753 samples | TV 0.0291 | - | info |
+| placement tail: sell s=3+ Delta>11 | 7.11% | 0.18% | relative bias -97.46% | - | info |
+| size: limit_size | 12 values | 262157 samples | TV 0.0031 | ≤ 0.0200 | PASS |
+| size: aggressive_size | 12 values | 29005 samples | TV 0.0045 | ≤ 0.0200 | PASS |
+| lifetime median: <=0 | 6.730 s | 6.720 s | relative error -0.15% | ≤ 20.00% | PASS |
+| lifetime median: 1-2 | 6.730 s | 6.770 s | relative error 0.59% | ≤ 20.00% | PASS |
+| lifetime median: 3-9 | 6.730 s | 6.590 s | relative error -2.08% | ≤ 20.00% | PASS |
+| lifetime median: >=10 | 6.730 s | 7.840 s | relative error 16.49% | ≤ 20.00% | PASS |
+| fit: buy | delta0 1.000, mu 0.600 | delta0 3.867, mu 2.715 | mu difference 2.1152 | - | info |
+| fit: sell | delta0 1.000, mu 0.600 | delta0 4.004, mu 2.811 | mu difference 2.2108 | - | info |
+
+`result: PASS (10 passed, 0 failed, 14 informational, 0 skipped)`
+
+What the filter does to the estimates, and why:
+
+- **λ_L is underestimated by 9%.** The filter hid 25,764 of 287,921 submissions (8.95%), and every one of them was placed 10 or more ticks behind the best: the number of orders in the ≤ 0, 1-2 and 3-9 buckets is the same in both exports (141,956, 68,236 and 51,119). λ_M is not touched: executions happen inside the window.
+- **The far tail of the placement PMF is lost.** Of 26,591 orders at Δ ≥ 10, 827 remain. Above the window's 95th percentile depth (10 ticks on the bid side, 11 on the ask side) the truth holds 6.8-8.4% of each bucket and the estimate 0.04-0.18%. The power-law fit, which sees only a truncated tail, gives μ of 2.7 and 2.8 instead of 0.6.
+- **Inside the window the placement is right.** No order with Δ < 10 was hidden, so the filtered TV up to the 95th percentile (0.010-0.019) is what is missing at the edge of that range: Δ = 10 on the bid side, 10 and 11 on the ask side (0.009-0.019 of it). With Δ ≥ 10 left out, the filtered TV is 0.002-0.013, the same as the unfiltered day's on the same range (0.002-0.014).
+- **Lifetimes are barely affected.** The medians of the three shallow buckets are the same as unfiltered. Orders that leave the window are censored (and their later deletes are not cancellations); what the filter removes are submissions that the L = 10 rule would have censored at lifetime 0 anyway. Only the ≥ 10 bucket is left too thin to measure.
+
+### What this does and does not show
+
+- **The check can fail.** Nine estimator faults were put in a copy of the sources, one at a time, and run through the CI check. Caught (eight): the Δ taken from the row after the message, a spread one tick too wide, the buy Δ measured from the ask, an execution counted as a cancellation, executed orders dropped instead of censored, every execution message counted as its own aggressive order, only the first execution of a burst counted, and a doubled lifetime clock. The unmodified estimator passes.
+- **It is blind to a swap of sides.** The ninth fault, reading the aggressor as the Direction side, is *not* caught, because the truth is the same on both sides. The unit tests of the estimator cover it.
+- **The tolerance of 0.03 is near the sampling noise at small samples.** Exact sampling of the s = 2 truth has a mean TV of 0.033 at 2,000 samples (above 0.03 in 67% of draws), 0.027 at 3,000 (27%), 0.021 at 5,000 (2%) and 0.015 at 10,000 (0%). A 20-minute run at the specification's tolerances fails one such bucket (sell, s = 2: TV 0.038 on 2,972 samples, seed 20240101); the counts pooled over ten seeds above show no mismatch there. The 2-hour run has at least 16,000 samples in every judged bucket.
+- **The check covers one market.** The s ≥ 3 bucket is reported only, and the truth has no state-dependent rates or sign memory.
+
+### The CI version
+
+The ctest `calibration_recovery` runs 20 minutes (seed 20240101, unfiltered, L = 40), with twice the tolerances, in 11 s in a debug build. It also fails if any rate, size or lifetime check was skipped or if fewer than four placement buckets had enough samples to be judged. `recovery_truth_up_to_date` checks that the committed truth is what the script writes.
 
 ## 6. The market fingerprint
 
@@ -186,11 +335,11 @@ Commands:
 scripts/make_fake_day.sh --out data/synthetic
 scripts/run_real_data.sh --calibrate --data-dir data/synthetic/SYNTHA --report <scratch>.md
 scripts/run_real_data.sh --calibrate --data-dir data/synthetic/SYNTHB --report <scratch>.md
-# cross-ticker: both days in one folder (hard links), so the script sees two tickers
+# cross-ticker: both days in one folder (hard links or symlinks), so the script sees two tickers
 scripts/run_real_data.sh --calibrate --data-dir data/synthetic_both --report <scratch>.md
 ```
 
-Wall time of each `validate` run (20 + 20 seeds, 1800 s measured each, includes the 1000-resample bootstrap of the data and the estimator): SYNTHA 12.1 s, SYNTHB 32.2 s when run alone; in the two-ticker run SYNTHA 16.5 s, SYNTHB 21.9 s, cross-ticker SYNTHA to SYNTHB 14.2 s (53 s for the whole script). Times vary with machine load. The runs are deterministic: the two-ticker run reproduced the single-folder `validation.json` byte for byte.
+Wall time of the script (release build, 8 threads, 20 + 20 seeds of 1800 s measured each, including the 1000-resample bootstrap of the data and the estimator): 10.2 s for SYNTHA, 16.5 s for SYNTHB, 37.6 s for the two-ticker folder with its cross-ticker run. Times vary with machine load. The runs are deterministic: the two-ticker run reproduced each single-folder `validation.json` exactly.
 
 ### Why the result is partly circular
 
@@ -198,123 +347,123 @@ The fake days were generated by the old hand-picked noise traders **plus** an in
 
 ### Scorecard: SYNTHA (SYNTHETIC data, NOT real market data)
 
-Verdicts, calibrated simulation: Calibrated: 30 match, 19 close, 3 miss, 1 undefined. Baseline: 29 match, 13 close, 10 miss, 1 undefined.
+Verdicts, calibrated simulation: Calibrated: 30 match, 18 close, 4 miss, 1 undefined. Baseline: 29 match, 13 close, 10 miss, 1 undefined.
 
 | metric | data (test) [95% interval] | calibrated sim [95% CI of mean] | baseline sim [95% CI of mean]; its verdict | calibrated verdict |
 |---|---|---|---|---|
-| `spread_mean` | 2.02 [1.99, 2.049] | 1.91 [1.905, 1.915] | 2.225 [2.22, 2.23]; miss (sim/data = 1.101) | miss (sim/data = 0.9452) |
-| `spread_one_tick_share` | 0.01574 [0.001509, 0.03533] | 0.1839 [0.1798, 0.1881] | 0.0003555 [0.000162, 0.000549]; close | miss (sim/data = 11.69) |
+| `spread_mean` | 2.02 [1.99, 2.049] | 1.916 [1.912, 1.921] | 2.225 [2.22, 2.23]; miss (sim/data = 1.101) | miss (sim/data = 0.9485) |
+| `spread_one_tick_share` | 0.01574 [0.001509, 0.03533] | 0.1818 [0.1784, 0.1852] | 0.0003555 [0.000162, 0.000549]; close | miss (sim/data = 11.55) |
 | `one_sided_share` | 0 [0, 0] | 0 [0, 0] | 0 [0, 0]; match | match |
-| `depth_buy_L1` | 56.83 [40.07, 74.82] | 76.55 [74.14, 78.96] | 66.87 [64.17, 69.58]; match | match |
-| `depth_buy_L2` | 177.6 [132.7, 221.9] | 228.7 [223.4, 234] | 216.9 [210.1, 223.6]; match | close |
-| `depth_buy_L3` | 279.9 [238.9, 319.1] | 310.4 [306.2, 314.6] | 318.6 [313.3, 323.8]; match | match |
-| `depth_buy_L4` | 324.1 [296.3, 346.6] | 338.5 [335.6, 341.5] | 347.9 [345.6, 350.3]; match | match |
-| `depth_buy_L5` | 339.7 [325.4, 351] | 343.9 [340.8, 347.1] | 350.5 [348.4, 352.6]; match | match |
-| `depth_buy_L6` | 340.9 [332.7, 350.7] | 345.3 [342.7, 347.9] | 351.1 [348.8, 353.3]; match | match |
-| `depth_buy_L7` | 340.9 [335.9, 349.2] | 344.9 [342.2, 347.7] | 351.3 [348.8, 353.8]; match | match |
-| `depth_buy_L8` | 332.4 [329.4, 339.6] | 334.5 [331.8, 337.2] | 348.7 [345.6, 351.7]; close | match |
-| `depth_buy_L9` | 311 [297.5, 328.7] | 295.8 [291.4, 300.2] | 320 [316, 324]; match | match |
-| `depth_buy_L10` | 249.4 [205.5, 292.7] | 196.4 [191.4, 201.4] | 216.4 [210.7, 222]; match | close |
-| `depth_sell_L1` | 78.7 [56.9, 101.7] | 51.67 [50.34, 52.99] | 67.26 [64.38, 70.15]; match | close |
-| `depth_sell_L2` | 223.3 [179.8, 269.6] | 168 [164.8, 171.2] | 215.9 [210.8, 221]; match | close |
-| `depth_sell_L3` | 308.9 [282.3, 335.8] | 263.6 [260, 267.2] | 316.3 [312.8, 319.9]; match | close |
-| `depth_sell_L4` | 337 [327.7, 348.2] | 315.1 [312.3, 317.9] | 347.8 [344.8, 350.8]; match | close |
-| `depth_sell_L5` | 343.1 [333.4, 349] | 335.8 [333.5, 338.1] | 351.3 [348.8, 353.7]; match | match |
-| `depth_sell_L6` | 343.7 [336.8, 350.1] | 345.3 [342.7, 347.8] | 351.4 [348.5, 354.2]; match | match |
-| `depth_sell_L7` | 336.1 [330.3, 342] | 346.8 [345, 348.7] | 350.3 [347.4, 353.2]; close | close |
-| `depth_sell_L8` | 324 [307.4, 343.1] | 343.7 [341.7, 345.7] | 348.4 [345.1, 351.8]; close | match |
-| `depth_sell_L9` | 285.4 [249.6, 324] | 324.5 [321.5, 327.5] | 321 [315.8, 326.2]; match | match |
-| `depth_sell_L10` | 200.6 [152, 255.7] | 250.2 [246.2, 254.1] | 217.2 [210.2, 224.1]; match | match |
-| `vol_1s` | 6.179e-05 [5.826e-05, 6.571e-05] | 6.728e-05 [6.654e-05, 6.803e-05] | 4.953e-05 [4.91e-05, 4.996e-05]; miss (sim/data = 0.8016) | close |
-| `vol_10s` | 8.479e-05 [7.437e-05, 9.027e-05] | 0.0001013 [9.916e-05, 0.0001035] | 8.234e-05 [8.018e-05, 8.449e-05]; match | close |
-| `vol_60s` | 0.0001904 [0.0001326, 0.0002237] | 0.0001266 [0.0001162, 0.000137] | 0.0001173 [0.0001101, 0.0001245]; close | match |
-| `kurtosis_10s` | -0.2402 [-0.795, 0.2264] | -0.3222 [-0.4207, -0.2238] | -0.2423 [-0.3627, -0.1219]; match | match |
-| `acf_ret_1s_lag1` | -0.39 [-0.4237, -0.3496] | -0.3221 [-0.3318, -0.3124] | -0.2625 [-0.2751, -0.2499]; miss (sim/data = 0.6731) | close |
-| `acf_abs_10s_lag1` | -0.04674 [-0.2069, 0.02653] | 0.07085 [0.02222, 0.1195] | 0.02087 [-0.01262, 0.05436]; match | match |
-| `acf_abs_10s_lag2` | 0.03943 [-0.03946, 0.1491] | 0.02069 [-0.03084, 0.07223] | -0.021 [-0.05789, 0.01589]; match | match |
-| `acf_abs_10s_lag3` | -0.04422 [-0.1161, 0.1202] | 0.01168 [-0.02077, 0.04412] | -0.02421 [-0.05774, 0.009326]; match | match |
-| `acf_abs_10s_lag4` | -0.08117 [-0.302, 0.06674] | -0.01718 [-0.05073, 0.01636] | -0.005434 [-0.04088, 0.03002]; match | match |
-| `acf_abs_10s_lag5` | 0.1816 [0.0637, 0.271] | 0.01021 [-0.02069, 0.0411] | -0.007598 [-0.03879, 0.0236]; close | close |
-| `acf_abs_10s_lag6` | 0.04174 [-0.1625, 0.129] | -0.005871 [-0.04748, 0.03574] | -0.01486 [-0.04801, 0.01829]; match | match |
-| `acf_abs_10s_lag7` | -0.09412 [-0.2547, 0.03904] | -0.01222 [-0.04761, 0.02317] | 0.01156 [-0.0185, 0.04163]; match | match |
-| `acf_abs_10s_lag8` | -0.1578 [-0.3924, 0.06801] | 0.02965 [-0.005476, 0.06478] | -0.01428 [-0.04298, 0.01443]; match | match |
-| `acf_abs_10s_lag9` | -0.1147 [-0.2718, 0.1193] | 0.001222 [-0.03136, 0.03381] | -0.01494 [-0.05517, 0.02528]; match | match |
-| `acf_abs_10s_lag10` | 0.06443 [-0.08972, 0.2156] | 0.01412 [-0.02607, 0.05431] | 0.02646 [-0.0006733, 0.0536]; match | match |
-| `sign_acf_lag1` | 0.04395 [0.02664, 0.06279] | 0.0003783 [-0.004642, 0.005398] | -0.002515 [-0.006451, 0.001422]; close | close |
-| `sign_acf_lag10` | 0.03483 [0.01645, 0.04239] | 0.0005669 [-0.0042, 0.005333] | -0.002394 [-0.005772, 0.0009836]; close | close |
-| `sign_acf_lag100` | 0.05712 [0.04184, 0.08096] | 0.0007156 [-0.0037, 0.005131] | 0.00245 [-0.001723, 0.006623]; close | close |
-| `fill_le0` | 0.8855 [0.8711, 0.8965] | 0.6328 [0.6301, 0.6354] | 0.8599 [0.8574, 0.8624]; close | miss (sim/data = 0.7146) |
-| `fill_1_2` | 0.3107 [0.2892, 0.3355] | 0.269 [0.2668, 0.2711] | 0.232 [0.2287, 0.2354]; miss (sim/data = 0.7468) | close |
-| `fill_3_9` | 0.01372 [0.007527, 0.02011] | 0.005659 [0.005332, 0.005987] | 0.001511 [0.001285, 0.001737]; close | close |
+| `depth_buy_L1` | 56.83 [40.07, 74.82] | 73.94 [72.41, 75.47] | 66.87 [64.17, 69.58]; match | match |
+| `depth_buy_L2` | 177.6 [132.7, 221.9] | 221.6 [217.8, 225.4] | 216.9 [210.1, 223.6]; match | match |
+| `depth_buy_L3` | 279.9 [238.9, 319.1] | 306 [302.4, 309.6] | 318.6 [313.3, 323.8]; match | match |
+| `depth_buy_L4` | 324.1 [296.3, 346.6] | 336.6 [334, 339.2] | 347.9 [345.6, 350.3]; match | match |
+| `depth_buy_L5` | 339.7 [325.4, 351] | 342.2 [339.8, 344.5] | 350.5 [348.4, 352.6]; match | match |
+| `depth_buy_L6` | 340.9 [332.7, 350.7] | 343.2 [341.1, 345.3] | 351.1 [348.8, 353.3]; match | match |
+| `depth_buy_L7` | 340.9 [335.9, 349.2] | 343.8 [342, 345.6] | 351.3 [348.8, 353.8]; match | match |
+| `depth_buy_L8` | 332.4 [329.4, 339.6] | 332.5 [330.1, 334.9] | 348.7 [345.6, 351.7]; close | match |
+| `depth_buy_L9` | 311 [297.5, 328.7] | 291.7 [288.3, 295] | 320 [316, 324]; match | close |
+| `depth_buy_L10` | 249.4 [205.5, 292.7] | 194.9 [190.9, 198.8] | 216.4 [210.7, 222]; match | close |
+| `depth_sell_L1` | 78.7 [56.9, 101.7] | 50.56 [49.06, 52.05] | 67.26 [64.38, 70.15]; match | close |
+| `depth_sell_L2` | 223.3 [179.8, 269.6] | 163.8 [160.9, 166.8] | 215.9 [210.8, 221]; match | close |
+| `depth_sell_L3` | 308.9 [282.3, 335.8] | 259.2 [255.6, 262.8] | 316.3 [312.8, 319.9]; match | close |
+| `depth_sell_L4` | 337 [327.7, 348.2] | 314.6 [311.5, 317.8] | 347.8 [344.8, 350.8]; match | close |
+| `depth_sell_L5` | 343.1 [333.4, 349] | 337.3 [334.8, 339.8] | 351.3 [348.8, 353.7]; match | match |
+| `depth_sell_L6` | 343.7 [336.8, 350.1] | 345.4 [343.1, 347.7] | 351.4 [348.5, 354.2]; match | match |
+| `depth_sell_L7` | 336.1 [330.3, 342] | 346.4 [344.1, 348.8] | 350.3 [347.4, 353.2]; close | close |
+| `depth_sell_L8` | 324 [307.4, 343.1] | 342.1 [340.1, 344.1] | 348.4 [345.1, 351.8]; close | match |
+| `depth_sell_L9` | 285.4 [249.6, 324] | 320.2 [317.9, 322.5] | 321 [315.8, 326.2]; match | match |
+| `depth_sell_L10` | 200.6 [152, 255.7] | 247.5 [244.6, 250.5] | 217.2 [210.2, 224.1]; match | match |
+| `vol_1s` | 6.179e-05 [5.826e-05, 6.571e-05] | 6.807e-05 [6.737e-05, 6.877e-05] | 4.953e-05 [4.91e-05, 4.996e-05]; miss (sim/data = 0.8016) | close |
+| `vol_10s` | 8.479e-05 [7.437e-05, 9.027e-05] | 0.0001036 [0.0001006, 0.0001067] | 8.234e-05 [8.018e-05, 8.449e-05]; match | close |
+| `vol_60s` | 0.0001904 [0.0001326, 0.0002237] | 0.000131 [0.0001226, 0.0001394] | 0.0001173 [0.0001101, 0.0001245]; close | match |
+| `kurtosis_10s` | -0.2402 [-0.795, 0.2264] | -0.1854 [-0.3461, -0.02459] | -0.2423 [-0.3627, -0.1219]; match | match |
+| `acf_ret_1s_lag1` | -0.39 [-0.4237, -0.3496] | -0.3116 [-0.3202, -0.3029] | -0.2625 [-0.2751, -0.2499]; miss (sim/data = 0.6731) | close |
+| `acf_abs_10s_lag1` | -0.04674 [-0.2069, 0.02653] | 0.07772 [0.04267, 0.1128] | 0.02087 [-0.01262, 0.05436]; match | close |
+| `acf_abs_10s_lag2` | 0.03943 [-0.03946, 0.1491] | 0.01327 [-0.02659, 0.05313] | -0.021 [-0.05789, 0.01589]; match | match |
+| `acf_abs_10s_lag3` | -0.04422 [-0.1161, 0.1202] | -0.01707 [-0.0537, 0.01955] | -0.02421 [-0.05774, 0.009326]; match | match |
+| `acf_abs_10s_lag4` | -0.08117 [-0.302, 0.06674] | -0.02732 [-0.05733, 0.002679] | -0.005434 [-0.04088, 0.03002]; match | match |
+| `acf_abs_10s_lag5` | 0.1816 [0.0637, 0.271] | 0.01684 [-0.01618, 0.04985] | -0.007598 [-0.03879, 0.0236]; close | close |
+| `acf_abs_10s_lag6` | 0.04174 [-0.1625, 0.129] | 0.01427 [-0.01875, 0.04728] | -0.01486 [-0.04801, 0.01829]; match | match |
+| `acf_abs_10s_lag7` | -0.09412 [-0.2547, 0.03904] | -0.04006 [-0.07471, -0.00542] | 0.01156 [-0.0185, 0.04163]; match | match |
+| `acf_abs_10s_lag8` | -0.1578 [-0.3924, 0.06801] | -0.002652 [-0.04126, 0.03596] | -0.01428 [-0.04298, 0.01443]; match | match |
+| `acf_abs_10s_lag9` | -0.1147 [-0.2718, 0.1193] | -0.01 [-0.03632, 0.01632] | -0.01494 [-0.05517, 0.02528]; match | match |
+| `acf_abs_10s_lag10` | 0.06443 [-0.08972, 0.2156] | -0.01046 [-0.03986, 0.01894] | 0.02646 [-0.0006733, 0.0536]; match | match |
+| `sign_acf_lag1` | 0.04395 [0.02664, 0.06279] | -0.0003188 [-0.003347, 0.00271] | -0.002515 [-0.006451, 0.001422]; close | close |
+| `sign_acf_lag10` | 0.03483 [0.01645, 0.04239] | 0.0008624 [-0.002351, 0.004075] | -0.002394 [-0.005772, 0.0009836]; close | close |
+| `sign_acf_lag100` | 0.05712 [0.04184, 0.08096] | -0.002384 [-0.005369, 0.0006005] | 0.00245 [-0.001723, 0.006623]; close | miss (sim/data = -0.04174) |
+| `fill_le0` | 0.8855 [0.8711, 0.8965] | 0.6352 [0.6338, 0.6366] | 0.8599 [0.8574, 0.8624]; close | miss (sim/data = 0.7173) |
+| `fill_1_2` | 0.3107 [0.2892, 0.3355] | 0.2786 [0.2761, 0.2812] | 0.232 [0.2287, 0.2354]; miss (sim/data = 0.7468) | close |
+| `fill_3_9` | 0.01372 [0.007527, 0.02011] | 0.00635 [0.005958, 0.006741] | 0.001511 [0.001285, 0.001737]; close | close |
 | `fill_ge10` | n/a [n/a] | 0 [0, 0] | n/a [n/a]; n/a | n/a |
-| `fill_all` | 0.1831 [0.177, 0.1889] | 0.1655 [0.1646, 0.1664] | 0.1509 [0.1502, 0.1516]; miss (sim/data = 0.8241) | close |
-| `executed_share` | 0.1809 [0.175, 0.187] | 0.1632 [0.1624, 0.1639] | 0.1495 [0.1488, 0.1501]; miss (sim/data = 0.8264) | close |
-| `lambda_limit_buy` | 23.57 [23.17, 23.98] | 24.04 [23.98, 24.09] | 21.23 [21.18, 21.28]; miss (sim/data = 0.9008) | close |
+| `fill_all` | 0.1831 [0.177, 0.1889] | 0.1695 [0.1688, 0.1702] | 0.1509 [0.1502, 0.1516]; miss (sim/data = 0.8241) | close |
+| `executed_share` | 0.1809 [0.175, 0.187] | 0.1668 [0.1661, 0.1674] | 0.1495 [0.1488, 0.1501]; miss (sim/data = 0.8264) | close |
+| `lambda_limit_buy` | 23.57 [23.17, 23.98] | 24 [23.96, 24.04] | 21.23 [21.18, 21.28]; miss (sim/data = 0.9008) | match |
 | `lambda_limit_sell` | 23.47 [22.99, 23.96] | 23.86 [23.81, 23.91] | 21.25 [21.2, 21.3]; miss (sim/data = 0.9056) | match |
-| `lambda_limit_total` | 47.03 [46.27, 47.88] | 47.89 [47.83, 47.95] | 42.48 [42.42, 42.54]; miss (sim/data = 0.9032) | match |
-| `lambda_market_buy` | 4.437 [3.868, 5.001] | 4.002 [3.98, 4.023] | 3.371 [3.351, 3.391]; close | match |
-| `lambda_market_sell` | 4.024 [3.67, 4.472] | 4.299 [4.284, 4.314] | 3.363 [3.343, 3.384]; close | match |
-| `lambda_market_total` | 8.462 [8.176, 8.695] | 8.301 [8.273, 8.328] | 6.734 [6.708, 6.761]; miss (sim/data = 0.7959) | match |
+| `lambda_limit_total` | 47.03 [46.27, 47.88] | 47.86 [47.81, 47.92] | 42.48 [42.42, 42.54]; miss (sim/data = 0.9032) | match |
+| `lambda_market_buy` | 4.437 [3.868, 5.001] | 4.057 [4.032, 4.082] | 3.371 [3.351, 3.391]; close | match |
+| `lambda_market_sell` | 4.024 [3.67, 4.472] | 4.357 [4.335, 4.38] | 3.363 [3.343, 3.384]; close | match |
+| `lambda_market_total` | 8.462 [8.176, 8.695] | 8.415 [8.385, 8.444] | 6.734 [6.708, 6.761]; miss (sim/data = 0.7959) | match |
 
 ### Scorecard: SYNTHB (SYNTHETIC data, NOT real market data)
 
-Verdicts, calibrated simulation: Calibrated: 31 match, 16 close, 5 miss, 1 undefined. Baseline: 16 match, 10 close, 26 miss, 1 undefined.
+Verdicts, calibrated simulation: Calibrated: 33 match, 14 close, 5 miss, 1 undefined. Baseline: 16 match, 10 close, 26 miss, 1 undefined.
 
 | metric | data (test) [95% interval] | calibrated sim [95% CI of mean] | baseline sim [95% CI of mean]; its verdict | calibrated verdict |
 |---|---|---|---|---|
-| `spread_mean` | 2.032 [2.001, 2.059] | 1.958 [1.954, 1.962] | 2.225 [2.22, 2.23]; miss (sim/data = 1.095) | close |
-| `spread_one_tick_share` | 0.01287 [0.001989, 0.03156] | 0.1611 [0.1584, 0.1639] | 0.0003555 [0.000162, 0.000549]; close | miss (sim/data = 12.52) |
+| `spread_mean` | 2.032 [2.001, 2.059] | 1.961 [1.958, 1.965] | 2.225 [2.22, 2.23]; miss (sim/data = 1.095) | close |
+| `spread_one_tick_share` | 0.01287 [0.001989, 0.03156] | 0.1614 [0.1586, 0.1642] | 0.0003555 [0.000162, 0.000549]; close | miss (sim/data = 12.54) |
 | `one_sided_share` | 0 [0, 0] | 0 [0, 0] | 0 [0, 0]; match | match |
-| `depth_buy_L1` | 116.9 [60.54, 168.6] | 95.62 [93.09, 98.14] | 66.87 [64.17, 69.58]; match | match |
-| `depth_buy_L2` | 339.9 [204.1, 469.7] | 344 [337.6, 350.4] | 216.9 [210.1, 223.6]; match | match |
-| `depth_buy_L3` | 500.3 [378, 618.9] | 552.7 [546.5, 558.9] | 318.6 [313.3, 323.8]; close | match |
-| `depth_buy_L4` | 582 [505.9, 656.5] | 652.3 [648, 656.7] | 347.9 [345.6, 350.3]; miss (sim/data = 0.5979) | match |
-| `depth_buy_L5` | 633.7 [590.4, 681.3] | 679.5 [676.4, 682.5] | 350.5 [348.4, 352.6]; miss (sim/data = 0.5531) | match |
-| `depth_buy_L6` | 655.8 [638.7, 684] | 685.8 [682.9, 688.8] | 351.1 [348.8, 353.3]; miss (sim/data = 0.5353) | match |
-| `depth_buy_L7` | 655.2 [642.6, 676.8] | 685.1 [682, 688.2] | 351.3 [348.8, 353.8]; miss (sim/data = 0.5362) | close |
-| `depth_buy_L8` | 646.4 [625.6, 674.9] | 674.8 [671.2, 678.5] | 348.7 [345.6, 351.7]; miss (sim/data = 0.5394) | match |
-| `depth_buy_L9` | 594 [535.4, 660] | 615.6 [611.2, 620.1] | 320 [316, 324]; miss (sim/data = 0.5388) | match |
-| `depth_buy_L10` | 478.4 [355.9, 604.1] | 447.9 [440.7, 455] | 216.4 [210.7, 222]; close | match |
-| `depth_sell_L1` | 165.9 [97.4, 237.9] | 103.9 [100, 107.7] | 67.26 [64.38, 70.15]; close | match |
-| `depth_sell_L2` | 442.2 [314.1, 578.6] | 359.6 [352, 367.1] | 215.9 [210.8, 221]; close | match |
-| `depth_sell_L3` | 572.4 [494.5, 658] | 562.3 [556.2, 568.5] | 316.3 [312.8, 319.9]; miss (sim/data = 0.5526) | match |
-| `depth_sell_L4` | 638.5 [610.6, 675.4] | 652.4 [647.7, 657] | 347.8 [344.8, 350.8]; miss (sim/data = 0.5447) | match |
-| `depth_sell_L5` | 657.5 [647.1, 674] | 678 [674.4, 681.6] | 351.3 [348.8, 353.7]; miss (sim/data = 0.5342) | close |
-| `depth_sell_L6` | 655.7 [630.4, 682.7] | 686.7 [682.9, 690.5] | 351.4 [348.5, 354.2]; miss (sim/data = 0.5359) | close |
-| `depth_sell_L7` | 627.8 [588.9, 668.5] | 687.9 [683.9, 691.9] | 350.3 [347.4, 353.2]; miss (sim/data = 0.558) | close |
-| `depth_sell_L8` | 583.8 [515.8, 647.9] | 672.9 [667.9, 677.9] | 348.4 [345.1, 351.8]; miss (sim/data = 0.5968) | close |
-| `depth_sell_L9` | 509.1 [392, 619.5] | 594.7 [588.1, 601.3] | 321 [315.8, 326.2]; close | match |
-| `depth_sell_L10` | 373.4 [218.9, 525.7] | 409.6 [402.7, 416.6] | 217.2 [210.2, 224.1]; match | match |
-| `vol_1s` | 5.976e-05 [5.741e-05, 6.094e-05] | 8.007e-05 [7.95e-05, 8.064e-05] | 4.932e-05 [4.889e-05, 4.975e-05]; miss (sim/data = 0.8252) | miss (sim/data = 1.34) |
-| `vol_10s` | 9.242e-05 [8.012e-05, 9.421e-05] | 0.0001082 [0.0001056, 0.0001109] | 8.198e-05 [7.984e-05, 8.413e-05]; match | close |
-| `vol_60s` | 0.0003196 [0.0001871, 0.0003429] | 0.0001301 [0.0001221, 0.0001382] | 0.0001168 [0.0001097, 0.0001239]; close | close |
-| `kurtosis_10s` | -0.6296 [-0.9634, 0.3695] | -0.3364 [-0.4246, -0.2482] | -0.2423 [-0.3627, -0.1219]; match | match |
-| `acf_ret_1s_lag1` | -0.354 [-0.3873, -0.3137] | -0.3824 [-0.3897, -0.3751] | -0.2625 [-0.2751, -0.2499]; close | match |
-| `acf_abs_10s_lag1` | -0.08165 [-0.2292, -0.007125] | 0.1003 [0.06622, 0.1344] | 0.02087 [-0.01262, 0.05436]; match | close |
-| `acf_abs_10s_lag2` | -0.04553 [-0.2113, -0.002475] | -0.02213 [-0.04747, 0.003209] | -0.021 [-0.05789, 0.01589]; match | match |
-| `acf_abs_10s_lag3` | 0.01444 [-0.1203, 0.1793] | -0.0004596 [-0.03776, 0.03684] | -0.02421 [-0.05774, 0.009326]; match | match |
-| `acf_abs_10s_lag4` | -0.04962 [-0.2251, 0.1118] | -0.01166 [-0.04922, 0.02589] | -0.005434 [-0.04088, 0.03002]; match | match |
-| `acf_abs_10s_lag5` | 0.06373 [-0.07189, 0.2811] | -0.007973 [-0.04999, 0.03405] | -0.007598 [-0.03879, 0.0236]; match | match |
-| `acf_abs_10s_lag6` | -0.1291 [-0.2938, 0.03859] | 0.003501 [-0.02419, 0.03119] | -0.01486 [-0.04801, 0.01829]; match | match |
-| `acf_abs_10s_lag7` | -0.0379 [-0.1813, 0.1073] | 0.0166 [-0.02347, 0.05668] | 0.01156 [-0.0185, 0.04163]; match | match |
-| `acf_abs_10s_lag8` | 0.01928 [-0.1445, 0.1524] | -0.001312 [-0.03329, 0.03067] | -0.01428 [-0.04298, 0.01443]; match | match |
-| `acf_abs_10s_lag9` | 0.03944 [-0.09029, 0.2006] | -0.02824 [-0.06337, 0.006882] | -0.01494 [-0.05517, 0.02528]; match | match |
-| `acf_abs_10s_lag10` | -0.05842 [-0.2643, 0.1295] | 0.01379 [-0.02497, 0.05255] | 0.02646 [-0.0006733, 0.0536]; match | match |
-| `sign_acf_lag1` | 0.07836 [0.0611, 0.0908] | -0.0009344 [-0.002381, 0.0005125] | -0.002515 [-0.006451, 0.001422]; miss (sim/data = -0.03209) | miss (sim/data = -0.01192) |
-| `sign_acf_lag10` | 0.07938 [0.0488, 0.09942] | -0.001375 [-0.003842, 0.001091] | -0.002394 [-0.005772, 0.0009836]; close | close |
-| `sign_acf_lag100` | 0.08269 [0.06219, 0.09778] | 0.001336 [-0.001224, 0.003896] | 0.00245 [-0.001723, 0.006623]; miss (sim/data = 0.02963) | miss (sim/data = 0.01616) |
-| `fill_le0` | 0.8974 [0.8867, 0.9034] | 0.6695 [0.6677, 0.6713] | 0.8599 [0.8574, 0.8624]; miss (sim/data = 0.9582) | miss (sim/data = 0.746) |
-| `fill_1_2` | 0.3391 [0.3275, 0.3558] | 0.3102 [0.3087, 0.3116] | 0.232 [0.2287, 0.2354]; miss (sim/data = 0.6843) | close |
-| `fill_3_9` | 0.03646 [0.02434, 0.05136] | 0.005607 [0.005343, 0.005871] | 0.001511 [0.001285, 0.001737]; close | close |
-| `fill_ge10` | n/a [n/a] | 0.25 [-0.5455, 1.046] | n/a [n/a]; n/a | n/a |
-| `fill_all` | 0.207 [0.1926, 0.221] | 0.1861 [0.1854, 0.1867] | 0.1509 [0.1502, 0.1516]; miss (sim/data = 0.729) | close |
-| `executed_share` | 0.2054 [0.1915, 0.2193] | 0.1845 [0.1839, 0.1851] | 0.1495 [0.1488, 0.1501]; miss (sim/data = 0.7276) | close |
-| `lambda_limit_buy` | 47.06 [46.01, 47.75] | 47.76 [47.7, 47.81] | 21.23 [21.18, 21.28]; miss (sim/data = 0.4511) | match |
-| `lambda_limit_sell` | 46.85 [46.06, 47.39] | 47.64 [47.57, 47.71] | 21.25 [21.2, 21.3]; miss (sim/data = 0.4536) | close |
-| `lambda_limit_total` | 93.91 [92.13, 95.03] | 95.39 [95.32, 95.47] | 42.48 [42.42, 42.54]; miss (sim/data = 0.4524) | close |
-| `lambda_market_buy` | 10.8 [8.366, 13.27] | 9.664 [9.632, 9.696] | 3.371 [3.351, 3.391]; miss (sim/data = 0.312) | match |
-| `lambda_market_sell` | 8.552 [7.149, 9.604] | 9.084 [9.049, 9.12] | 3.363 [3.343, 3.384]; miss (sim/data = 0.3933) | match |
-| `lambda_market_total` | 19.36 [17.77, 20.6] | 18.75 [18.71, 18.79] | 6.734 [6.708, 6.761]; miss (sim/data = 0.3479) | match |
+| `depth_buy_L1` | 116.9 [60.54, 168.6] | 98.1 [94.62, 101.6] | 66.87 [64.17, 69.58]; match | match |
+| `depth_buy_L2` | 339.9 [204.1, 469.7] | 345.5 [338.5, 352.5] | 216.9 [210.1, 223.6]; match | match |
+| `depth_buy_L3` | 500.3 [378, 618.9] | 548.1 [541.5, 554.7] | 318.6 [313.3, 323.8]; close | match |
+| `depth_buy_L4` | 582 [505.9, 656.5] | 649 [644.2, 653.9] | 347.9 [345.6, 350.3]; miss (sim/data = 0.5979) | match |
+| `depth_buy_L5` | 633.7 [590.4, 681.3] | 677.6 [673.2, 681.9] | 350.5 [348.4, 352.6]; miss (sim/data = 0.5531) | match |
+| `depth_buy_L6` | 655.8 [638.7, 684] | 684.9 [681.2, 688.6] | 351.1 [348.8, 353.3]; miss (sim/data = 0.5353) | match |
+| `depth_buy_L7` | 655.2 [642.6, 676.8] | 685.1 [681.7, 688.5] | 351.3 [348.8, 353.8]; miss (sim/data = 0.5362) | close |
+| `depth_buy_L8` | 646.4 [625.6, 674.9] | 671.9 [669.4, 674.3] | 348.7 [345.6, 351.7]; miss (sim/data = 0.5394) | match |
+| `depth_buy_L9` | 594 [535.4, 660] | 607.2 [602.6, 611.8] | 320 [316, 324]; miss (sim/data = 0.5388) | match |
+| `depth_buy_L10` | 478.4 [355.9, 604.1] | 439.1 [431.9, 446.3] | 216.4 [210.7, 222]; close | match |
+| `depth_sell_L1` | 165.9 [97.4, 237.9] | 98.87 [96.11, 101.6] | 67.26 [64.38, 70.15]; close | match |
+| `depth_sell_L2` | 442.2 [314.1, 578.6] | 345.8 [339.3, 352.3] | 215.9 [210.8, 221]; close | match |
+| `depth_sell_L3` | 572.4 [494.5, 658] | 548.6 [542.5, 554.7] | 316.3 [312.8, 319.9]; miss (sim/data = 0.5526) | match |
+| `depth_sell_L4` | 638.5 [610.6, 675.4] | 644.7 [640.4, 648.9] | 347.8 [344.8, 350.8]; miss (sim/data = 0.5447) | match |
+| `depth_sell_L5` | 657.5 [647.1, 674] | 672.6 [668.9, 676.3] | 351.3 [348.8, 353.7]; miss (sim/data = 0.5342) | match |
+| `depth_sell_L6` | 655.7 [630.4, 682.7] | 682.8 [679.9, 685.8] | 351.4 [348.5, 354.2]; miss (sim/data = 0.5359) | match |
+| `depth_sell_L7` | 627.8 [588.9, 668.5] | 685.1 [682.5, 687.8] | 350.3 [347.4, 353.2]; miss (sim/data = 0.558) | close |
+| `depth_sell_L8` | 583.8 [515.8, 647.9] | 667.6 [664.6, 670.6] | 348.4 [345.1, 351.8]; miss (sim/data = 0.5968) | close |
+| `depth_sell_L9` | 509.1 [392, 619.5] | 590.4 [584.9, 595.9] | 321 [315.8, 326.2]; close | match |
+| `depth_sell_L10` | 373.4 [218.9, 525.7] | 410.9 [403.5, 418.3] | 217.2 [210.2, 224.1]; match | match |
+| `vol_1s` | 5.976e-05 [5.741e-05, 6.094e-05] | 8.122e-05 [8.06e-05, 8.184e-05] | 4.932e-05 [4.889e-05, 4.975e-05]; miss (sim/data = 0.8252) | miss (sim/data = 1.359) |
+| `vol_10s` | 9.242e-05 [8.012e-05, 9.421e-05] | 0.0001096 [0.0001068, 0.0001124] | 8.198e-05 [7.984e-05, 8.413e-05]; match | close |
+| `vol_60s` | 0.0003196 [0.0001871, 0.0003429] | 0.0001388 [0.000131, 0.0001466] | 0.0001168 [0.0001097, 0.0001239]; close | close |
+| `kurtosis_10s` | -0.6296 [-0.9634, 0.3695] | -0.3694 [-0.4771, -0.2618] | -0.2423 [-0.3627, -0.1219]; match | match |
+| `acf_ret_1s_lag1` | -0.354 [-0.3873, -0.3137] | -0.3819 [-0.3907, -0.3732] | -0.2625 [-0.2751, -0.2499]; close | match |
+| `acf_abs_10s_lag1` | -0.08165 [-0.2292, -0.007125] | 0.06218 [0.02588, 0.09848] | 0.02087 [-0.01262, 0.05436]; match | close |
+| `acf_abs_10s_lag2` | -0.04553 [-0.2113, -0.002475] | -0.03554 [-0.06615, -0.004927] | -0.021 [-0.05789, 0.01589]; match | match |
+| `acf_abs_10s_lag3` | 0.01444 [-0.1203, 0.1793] | 0.01162 [-0.01891, 0.04215] | -0.02421 [-0.05774, 0.009326]; match | match |
+| `acf_abs_10s_lag4` | -0.04962 [-0.2251, 0.1118] | 0.006364 [-0.03957, 0.0523] | -0.005434 [-0.04088, 0.03002]; match | match |
+| `acf_abs_10s_lag5` | 0.06373 [-0.07189, 0.2811] | 0.008437 [-0.02591, 0.04279] | -0.007598 [-0.03879, 0.0236]; match | match |
+| `acf_abs_10s_lag6` | -0.1291 [-0.2938, 0.03859] | 0.002883 [-0.03878, 0.04454] | -0.01486 [-0.04801, 0.01829]; match | match |
+| `acf_abs_10s_lag7` | -0.0379 [-0.1813, 0.1073] | 0.009232 [-0.02505, 0.04351] | 0.01156 [-0.0185, 0.04163]; match | match |
+| `acf_abs_10s_lag8` | 0.01928 [-0.1445, 0.1524] | 0.002603 [-0.0411, 0.0463] | -0.01428 [-0.04298, 0.01443]; match | match |
+| `acf_abs_10s_lag9` | 0.03944 [-0.09029, 0.2006] | -0.01646 [-0.05045, 0.01753] | -0.01494 [-0.05517, 0.02528]; match | match |
+| `acf_abs_10s_lag10` | -0.05842 [-0.2643, 0.1295] | -0.01761 [-0.05656, 0.02134] | 0.02646 [-0.0006733, 0.0536]; match | match |
+| `sign_acf_lag1` | 0.07836 [0.0611, 0.0908] | -0.0006877 [-0.003252, 0.001877] | -0.002515 [-0.006451, 0.001422]; miss (sim/data = -0.03209) | miss (sim/data = -0.008776) |
+| `sign_acf_lag10` | 0.07938 [0.0488, 0.09942] | -0.001791 [-0.004074, 0.0004915] | -0.002394 [-0.005772, 0.0009836]; close | close |
+| `sign_acf_lag100` | 0.08269 [0.06219, 0.09778] | -0.0007549 [-0.003443, 0.001933] | 0.00245 [-0.001723, 0.006623]; miss (sim/data = 0.02963) | miss (sim/data = -0.009129) |
+| `fill_le0` | 0.8974 [0.8867, 0.9034] | 0.6737 [0.6722, 0.6753] | 0.8599 [0.8574, 0.8624]; miss (sim/data = 0.9582) | miss (sim/data = 0.7507) |
+| `fill_1_2` | 0.3391 [0.3275, 0.3558] | 0.3201 [0.3185, 0.3216] | 0.232 [0.2287, 0.2354]; miss (sim/data = 0.6843) | close |
+| `fill_3_9` | 0.03646 [0.02434, 0.05136] | 0.006325 [0.006072, 0.006578] | 0.001511 [0.001285, 0.001737]; close | close |
+| `fill_ge10` | n/a [n/a] | 0 [0, 0] | n/a [n/a]; n/a | n/a |
+| `fill_all` | 0.207 [0.1926, 0.221] | 0.1901 [0.1895, 0.1907] | 0.1509 [0.1502, 0.1516]; miss (sim/data = 0.729) | close |
+| `executed_share` | 0.2054 [0.1915, 0.2193] | 0.1885 [0.1879, 0.1891] | 0.1495 [0.1488, 0.1501]; miss (sim/data = 0.7276) | close |
+| `lambda_limit_buy` | 47.06 [46.01, 47.75] | 47.77 [47.71, 47.83] | 21.23 [21.18, 21.28]; miss (sim/data = 0.4511) | match |
+| `lambda_limit_sell` | 46.85 [46.06, 47.39] | 47.63 [47.54, 47.73] | 21.25 [21.2, 21.3]; miss (sim/data = 0.4536) | close |
+| `lambda_limit_total` | 93.91 [92.13, 95.03] | 95.4 [95.3, 95.51] | 42.48 [42.42, 42.54]; miss (sim/data = 0.4524) | close |
+| `lambda_market_buy` | 10.8 [8.366, 13.27] | 9.794 [9.753, 9.836] | 3.371 [3.351, 3.391]; miss (sim/data = 0.312) | match |
+| `lambda_market_sell` | 8.552 [7.149, 9.604] | 9.207 [9.172, 9.243] | 3.363 [3.343, 3.384]; miss (sim/data = 0.3933) | match |
+| `lambda_market_total` | 19.36 [17.77, 20.6] | 19 [18.95, 19.06] | 6.734 [6.708, 6.761]; miss (sim/data = 0.3479) | match |
 
 ### Cross-ticker scorecard: calibrated on SYNTHA, validated on SYNTHB (SYNTHETIC data, NOT real market data)
 
@@ -322,59 +471,59 @@ Verdicts, calibrated simulation: Calibrated: 15 match, 13 close, 24 miss, 1 unde
 
 | metric | data (test) [95% interval] | calibrated sim [95% CI of mean] | baseline sim [95% CI of mean]; its verdict | calibrated verdict |
 |---|---|---|---|---|
-| `spread_mean` | 2.032 [2.001, 2.059] | 1.91 [1.905, 1.915] | 2.225 [2.22, 2.23]; miss (sim/data = 1.095) | miss (sim/data = 0.94) |
-| `spread_one_tick_share` | 0.01287 [0.001989, 0.03156] | 0.1839 [0.1798, 0.1881] | 0.0003555 [0.000162, 0.000549]; close | miss (sim/data = 14.29) |
+| `spread_mean` | 2.032 [2.001, 2.059] | 1.916 [1.912, 1.921] | 2.225 [2.22, 2.23]; miss (sim/data = 1.095) | miss (sim/data = 0.9432) |
+| `spread_one_tick_share` | 0.01287 [0.001989, 0.03156] | 0.1818 [0.1784, 0.1852] | 0.0003555 [0.000162, 0.000549]; close | miss (sim/data = 14.13) |
 | `one_sided_share` | 0 [0, 0] | 0 [0, 0] | 0 [0, 0]; match | match |
-| `depth_buy_L1` | 116.9 [60.54, 168.6] | 76.55 [74.14, 78.96] | 66.87 [64.17, 69.58]; match | match |
-| `depth_buy_L2` | 339.9 [204.1, 469.7] | 228.7 [223.4, 234] | 216.9 [210.1, 223.6]; match | match |
-| `depth_buy_L3` | 500.3 [378, 618.9] | 310.4 [306.2, 314.6] | 318.6 [313.3, 323.8]; close | close |
-| `depth_buy_L4` | 582 [505.9, 656.5] | 338.5 [335.6, 341.5] | 347.9 [345.6, 350.3]; miss (sim/data = 0.5979) | miss (sim/data = 0.5817) |
-| `depth_buy_L5` | 633.7 [590.4, 681.3] | 343.9 [340.8, 347.1] | 350.5 [348.4, 352.6]; miss (sim/data = 0.5531) | miss (sim/data = 0.5427) |
-| `depth_buy_L6` | 655.8 [638.7, 684] | 345.3 [342.7, 347.9] | 351.1 [348.8, 353.3]; miss (sim/data = 0.5353) | miss (sim/data = 0.5266) |
-| `depth_buy_L7` | 655.2 [642.6, 676.8] | 344.9 [342.2, 347.7] | 351.3 [348.8, 353.8]; miss (sim/data = 0.5362) | miss (sim/data = 0.5264) |
-| `depth_buy_L8` | 646.4 [625.6, 674.9] | 334.5 [331.8, 337.2] | 348.7 [345.6, 351.7]; miss (sim/data = 0.5394) | miss (sim/data = 0.5175) |
-| `depth_buy_L9` | 594 [535.4, 660] | 295.8 [291.4, 300.2] | 320 [316, 324]; miss (sim/data = 0.5388) | miss (sim/data = 0.498) |
-| `depth_buy_L10` | 478.4 [355.9, 604.1] | 196.4 [191.4, 201.4] | 216.4 [210.7, 222]; close | close |
-| `depth_sell_L1` | 165.9 [97.4, 237.9] | 51.67 [50.34, 52.99] | 67.26 [64.38, 70.15]; close | close |
-| `depth_sell_L2` | 442.2 [314.1, 578.6] | 168 [164.8, 171.2] | 215.9 [210.8, 221]; close | close |
-| `depth_sell_L3` | 572.4 [494.5, 658] | 263.6 [260, 267.2] | 316.3 [312.8, 319.9]; miss (sim/data = 0.5526) | miss (sim/data = 0.4605) |
-| `depth_sell_L4` | 638.5 [610.6, 675.4] | 315.1 [312.3, 317.9] | 347.8 [344.8, 350.8]; miss (sim/data = 0.5447) | miss (sim/data = 0.4935) |
-| `depth_sell_L5` | 657.5 [647.1, 674] | 335.8 [333.5, 338.1] | 351.3 [348.8, 353.7]; miss (sim/data = 0.5342) | miss (sim/data = 0.5107) |
-| `depth_sell_L6` | 655.7 [630.4, 682.7] | 345.3 [342.7, 347.8] | 351.4 [348.5, 354.2]; miss (sim/data = 0.5359) | miss (sim/data = 0.5266) |
-| `depth_sell_L7` | 627.8 [588.9, 668.5] | 346.8 [345, 348.7] | 350.3 [347.4, 353.2]; miss (sim/data = 0.558) | miss (sim/data = 0.5525) |
-| `depth_sell_L8` | 583.8 [515.8, 647.9] | 343.7 [341.7, 345.7] | 348.4 [345.1, 351.8]; miss (sim/data = 0.5968) | miss (sim/data = 0.5887) |
-| `depth_sell_L9` | 509.1 [392, 619.5] | 324.5 [321.5, 327.5] | 321 [315.8, 326.2]; close | close |
-| `depth_sell_L10` | 373.4 [218.9, 525.7] | 250.2 [246.2, 254.1] | 217.2 [210.2, 224.1]; match | match |
-| `vol_1s` | 5.976e-05 [5.741e-05, 6.094e-05] | 6.699e-05 [6.625e-05, 6.774e-05] | 4.932e-05 [4.889e-05, 4.975e-05]; miss (sim/data = 0.8252) | miss (sim/data = 1.121) |
-| `vol_10s` | 9.242e-05 [8.012e-05, 9.421e-05] | 0.0001009 [9.873e-05, 0.0001031] | 8.198e-05 [7.984e-05, 8.413e-05]; match | close |
-| `vol_60s` | 0.0003196 [0.0001871, 0.0003429] | 0.0001261 [0.0001157, 0.0001364] | 0.0001168 [0.0001097, 0.0001239]; close | close |
-| `kurtosis_10s` | -0.6296 [-0.9634, 0.3695] | -0.3222 [-0.4207, -0.2238] | -0.2423 [-0.3627, -0.1219]; match | match |
-| `acf_ret_1s_lag1` | -0.354 [-0.3873, -0.3137] | -0.3221 [-0.3318, -0.3124] | -0.2625 [-0.2751, -0.2499]; close | match |
-| `acf_abs_10s_lag1` | -0.08165 [-0.2292, -0.007125] | 0.07085 [0.02222, 0.1195] | 0.02087 [-0.01262, 0.05436]; match | close |
-| `acf_abs_10s_lag2` | -0.04553 [-0.2113, -0.002475] | 0.02069 [-0.03084, 0.07223] | -0.021 [-0.05789, 0.01589]; match | match |
-| `acf_abs_10s_lag3` | 0.01444 [-0.1203, 0.1793] | 0.01168 [-0.02077, 0.04412] | -0.02421 [-0.05774, 0.009326]; match | match |
-| `acf_abs_10s_lag4` | -0.04962 [-0.2251, 0.1118] | -0.01718 [-0.05073, 0.01636] | -0.005434 [-0.04088, 0.03002]; match | match |
-| `acf_abs_10s_lag5` | 0.06373 [-0.07189, 0.2811] | 0.01021 [-0.02069, 0.0411] | -0.007598 [-0.03879, 0.0236]; match | match |
-| `acf_abs_10s_lag6` | -0.1291 [-0.2938, 0.03859] | -0.005871 [-0.04748, 0.03574] | -0.01486 [-0.04801, 0.01829]; match | match |
-| `acf_abs_10s_lag7` | -0.0379 [-0.1813, 0.1073] | -0.01222 [-0.04761, 0.02317] | 0.01156 [-0.0185, 0.04163]; match | match |
-| `acf_abs_10s_lag8` | 0.01928 [-0.1445, 0.1524] | 0.02965 [-0.005476, 0.06478] | -0.01428 [-0.04298, 0.01443]; match | match |
-| `acf_abs_10s_lag9` | 0.03944 [-0.09029, 0.2006] | 0.001223 [-0.03136, 0.03381] | -0.01494 [-0.05517, 0.02528]; match | match |
-| `acf_abs_10s_lag10` | -0.05842 [-0.2643, 0.1295] | 0.01412 [-0.02607, 0.05431] | 0.02646 [-0.0006733, 0.0536]; match | match |
-| `sign_acf_lag1` | 0.07836 [0.0611, 0.0908] | 0.0003783 [-0.004642, 0.005398] | -0.002515 [-0.006451, 0.001422]; miss (sim/data = -0.03209) | miss (sim/data = 0.004828) |
-| `sign_acf_lag10` | 0.07938 [0.0488, 0.09942] | 0.0005669 [-0.0042, 0.005333] | -0.002394 [-0.005772, 0.0009836]; close | close |
-| `sign_acf_lag100` | 0.08269 [0.06219, 0.09778] | 0.0007156 [-0.0037, 0.005131] | 0.00245 [-0.001723, 0.006623]; miss (sim/data = 0.02963) | miss (sim/data = 0.008654) |
-| `fill_le0` | 0.8974 [0.8867, 0.9034] | 0.6328 [0.6301, 0.6354] | 0.8599 [0.8574, 0.8624]; miss (sim/data = 0.9582) | miss (sim/data = 0.7051) |
-| `fill_1_2` | 0.3391 [0.3275, 0.3558] | 0.269 [0.2668, 0.2711] | 0.232 [0.2287, 0.2354]; miss (sim/data = 0.6843) | miss (sim/data = 0.7932) |
-| `fill_3_9` | 0.03646 [0.02434, 0.05136] | 0.005659 [0.005332, 0.005987] | 0.001511 [0.001285, 0.001737]; close | close |
+| `depth_buy_L1` | 116.9 [60.54, 168.6] | 73.94 [72.41, 75.47] | 66.87 [64.17, 69.58]; match | match |
+| `depth_buy_L2` | 339.9 [204.1, 469.7] | 221.6 [217.8, 225.4] | 216.9 [210.1, 223.6]; match | match |
+| `depth_buy_L3` | 500.3 [378, 618.9] | 306 [302.4, 309.6] | 318.6 [313.3, 323.8]; close | close |
+| `depth_buy_L4` | 582 [505.9, 656.5] | 336.6 [334, 339.2] | 347.9 [345.6, 350.3]; miss (sim/data = 0.5979) | miss (sim/data = 0.5784) |
+| `depth_buy_L5` | 633.7 [590.4, 681.3] | 342.2 [339.8, 344.5] | 350.5 [348.4, 352.6]; miss (sim/data = 0.5531) | miss (sim/data = 0.5399) |
+| `depth_buy_L6` | 655.8 [638.7, 684] | 343.2 [341.1, 345.3] | 351.1 [348.8, 353.3]; miss (sim/data = 0.5353) | miss (sim/data = 0.5233) |
+| `depth_buy_L7` | 655.2 [642.6, 676.8] | 343.8 [342, 345.6] | 351.3 [348.8, 353.8]; miss (sim/data = 0.5362) | miss (sim/data = 0.5247) |
+| `depth_buy_L8` | 646.4 [625.6, 674.9] | 332.5 [330.1, 334.9] | 348.7 [345.6, 351.7]; miss (sim/data = 0.5394) | miss (sim/data = 0.5144) |
+| `depth_buy_L9` | 594 [535.4, 660] | 291.7 [288.3, 295] | 320 [316, 324]; miss (sim/data = 0.5388) | miss (sim/data = 0.491) |
+| `depth_buy_L10` | 478.4 [355.9, 604.1] | 194.9 [190.9, 198.8] | 216.4 [210.7, 222]; close | close |
+| `depth_sell_L1` | 165.9 [97.4, 237.9] | 50.56 [49.06, 52.05] | 67.26 [64.38, 70.15]; close | close |
+| `depth_sell_L2` | 442.2 [314.1, 578.6] | 163.8 [160.9, 166.8] | 215.9 [210.8, 221]; close | close |
+| `depth_sell_L3` | 572.4 [494.5, 658] | 259.2 [255.6, 262.8] | 316.3 [312.8, 319.9]; miss (sim/data = 0.5526) | miss (sim/data = 0.4529) |
+| `depth_sell_L4` | 638.5 [610.6, 675.4] | 314.6 [311.5, 317.8] | 347.8 [344.8, 350.8]; miss (sim/data = 0.5447) | miss (sim/data = 0.4928) |
+| `depth_sell_L5` | 657.5 [647.1, 674] | 337.3 [334.8, 339.8] | 351.3 [348.8, 353.7]; miss (sim/data = 0.5342) | miss (sim/data = 0.513) |
+| `depth_sell_L6` | 655.7 [630.4, 682.7] | 345.4 [343.1, 347.7] | 351.4 [348.5, 354.2]; miss (sim/data = 0.5359) | miss (sim/data = 0.5268) |
+| `depth_sell_L7` | 627.8 [588.9, 668.5] | 346.4 [344.1, 348.8] | 350.3 [347.4, 353.2]; miss (sim/data = 0.558) | miss (sim/data = 0.5518) |
+| `depth_sell_L8` | 583.8 [515.8, 647.9] | 342.1 [340.1, 344.1] | 348.4 [345.1, 351.8]; miss (sim/data = 0.5968) | miss (sim/data = 0.586) |
+| `depth_sell_L9` | 509.1 [392, 619.5] | 320.2 [317.9, 322.5] | 321 [315.8, 326.2]; close | close |
+| `depth_sell_L10` | 373.4 [218.9, 525.7] | 247.5 [244.6, 250.5] | 217.2 [210.2, 224.1]; match | match |
+| `vol_1s` | 5.976e-05 [5.741e-05, 6.094e-05] | 6.777e-05 [6.708e-05, 6.847e-05] | 4.932e-05 [4.889e-05, 4.975e-05]; miss (sim/data = 0.8252) | miss (sim/data = 1.134) |
+| `vol_10s` | 9.242e-05 [8.012e-05, 9.421e-05] | 0.0001032 [0.0001001, 0.0001062] | 8.198e-05 [7.984e-05, 8.413e-05]; match | close |
+| `vol_60s` | 0.0003196 [0.0001871, 0.0003429] | 0.0001305 [0.0001221, 0.0001388] | 0.0001168 [0.0001097, 0.0001239]; close | close |
+| `kurtosis_10s` | -0.6296 [-0.9634, 0.3695] | -0.1854 [-0.3461, -0.02459] | -0.2423 [-0.3627, -0.1219]; match | match |
+| `acf_ret_1s_lag1` | -0.354 [-0.3873, -0.3137] | -0.3116 [-0.3202, -0.3029] | -0.2625 [-0.2751, -0.2499]; close | match |
+| `acf_abs_10s_lag1` | -0.08165 [-0.2292, -0.007125] | 0.07772 [0.04267, 0.1128] | 0.02087 [-0.01262, 0.05436]; match | close |
+| `acf_abs_10s_lag2` | -0.04553 [-0.2113, -0.002475] | 0.01327 [-0.02659, 0.05313] | -0.021 [-0.05789, 0.01589]; match | match |
+| `acf_abs_10s_lag3` | 0.01444 [-0.1203, 0.1793] | -0.01707 [-0.0537, 0.01955] | -0.02421 [-0.05774, 0.009326]; match | match |
+| `acf_abs_10s_lag4` | -0.04962 [-0.2251, 0.1118] | -0.02732 [-0.05733, 0.002679] | -0.005434 [-0.04088, 0.03002]; match | match |
+| `acf_abs_10s_lag5` | 0.06373 [-0.07189, 0.2811] | 0.01684 [-0.01618, 0.04985] | -0.007598 [-0.03879, 0.0236]; match | match |
+| `acf_abs_10s_lag6` | -0.1291 [-0.2938, 0.03859] | 0.01426 [-0.01875, 0.04728] | -0.01486 [-0.04801, 0.01829]; match | match |
+| `acf_abs_10s_lag7` | -0.0379 [-0.1813, 0.1073] | -0.04006 [-0.07471, -0.00542] | 0.01156 [-0.0185, 0.04163]; match | match |
+| `acf_abs_10s_lag8` | 0.01928 [-0.1445, 0.1524] | -0.002652 [-0.04126, 0.03596] | -0.01428 [-0.04298, 0.01443]; match | match |
+| `acf_abs_10s_lag9` | 0.03944 [-0.09029, 0.2006] | -0.01 [-0.03632, 0.01632] | -0.01494 [-0.05517, 0.02528]; match | match |
+| `acf_abs_10s_lag10` | -0.05842 [-0.2643, 0.1295] | -0.01046 [-0.03986, 0.01894] | 0.02646 [-0.0006733, 0.0536]; match | match |
+| `sign_acf_lag1` | 0.07836 [0.0611, 0.0908] | -0.0003188 [-0.003347, 0.00271] | -0.002515 [-0.006451, 0.001422]; miss (sim/data = -0.03209) | miss (sim/data = -0.004069) |
+| `sign_acf_lag10` | 0.07938 [0.0488, 0.09942] | 0.0008624 [-0.002351, 0.004075] | -0.002394 [-0.005772, 0.0009836]; close | close |
+| `sign_acf_lag100` | 0.08269 [0.06219, 0.09778] | -0.002384 [-0.005369, 0.0006005] | 0.00245 [-0.001723, 0.006623]; miss (sim/data = 0.02963) | miss (sim/data = -0.02883) |
+| `fill_le0` | 0.8974 [0.8867, 0.9034] | 0.6352 [0.6338, 0.6366] | 0.8599 [0.8574, 0.8624]; miss (sim/data = 0.9582) | miss (sim/data = 0.7078) |
+| `fill_1_2` | 0.3391 [0.3275, 0.3558] | 0.2786 [0.2761, 0.2812] | 0.232 [0.2287, 0.2354]; miss (sim/data = 0.6843) | miss (sim/data = 0.8217) |
+| `fill_3_9` | 0.03646 [0.02434, 0.05136] | 0.00635 [0.005958, 0.006741] | 0.001511 [0.001285, 0.001737]; close | close |
 | `fill_ge10` | n/a [n/a] | 0 [0, 0] | n/a [n/a]; n/a | n/a |
-| `fill_all` | 0.207 [0.1926, 0.221] | 0.1655 [0.1646, 0.1664] | 0.1509 [0.1502, 0.1516]; miss (sim/data = 0.729) | close |
-| `executed_share` | 0.2054 [0.1915, 0.2193] | 0.1632 [0.1624, 0.1639] | 0.1495 [0.1488, 0.1501]; miss (sim/data = 0.7276) | close |
-| `lambda_limit_buy` | 47.06 [46.01, 47.75] | 24.04 [23.98, 24.09] | 21.23 [21.18, 21.28]; miss (sim/data = 0.4511) | miss (sim/data = 0.5107) |
-| `lambda_limit_sell` | 46.85 [46.06, 47.39] | 23.86 [23.81, 23.91] | 21.25 [21.2, 21.3]; miss (sim/data = 0.4536) | miss (sim/data = 0.5092) |
-| `lambda_limit_total` | 93.91 [92.13, 95.03] | 47.89 [47.83, 47.95] | 42.48 [42.42, 42.54]; miss (sim/data = 0.4524) | miss (sim/data = 0.51) |
-| `lambda_market_buy` | 10.8 [8.366, 13.27] | 4.002 [3.98, 4.023] | 3.371 [3.351, 3.391]; miss (sim/data = 0.312) | close |
-| `lambda_market_sell` | 8.552 [7.149, 9.604] | 4.299 [4.284, 4.314] | 3.363 [3.343, 3.384]; miss (sim/data = 0.3933) | miss (sim/data = 0.5027) |
-| `lambda_market_total` | 19.36 [17.77, 20.6] | 8.301 [8.273, 8.328] | 6.734 [6.708, 6.761]; miss (sim/data = 0.3479) | miss (sim/data = 0.4288) |
+| `fill_all` | 0.207 [0.1926, 0.221] | 0.1695 [0.1688, 0.1702] | 0.1509 [0.1502, 0.1516]; miss (sim/data = 0.729) | close |
+| `executed_share` | 0.2054 [0.1915, 0.2193] | 0.1668 [0.1661, 0.1674] | 0.1495 [0.1488, 0.1501]; miss (sim/data = 0.7276) | close |
+| `lambda_limit_buy` | 47.06 [46.01, 47.75] | 24 [23.96, 24.04] | 21.23 [21.18, 21.28]; miss (sim/data = 0.4511) | miss (sim/data = 0.51) |
+| `lambda_limit_sell` | 46.85 [46.06, 47.39] | 23.86 [23.81, 23.91] | 21.25 [21.2, 21.3]; miss (sim/data = 0.4536) | miss (sim/data = 0.5093) |
+| `lambda_limit_total` | 93.91 [92.13, 95.03] | 47.86 [47.81, 47.92] | 42.48 [42.42, 42.54]; miss (sim/data = 0.4524) | miss (sim/data = 0.5097) |
+| `lambda_market_buy` | 10.8 [8.366, 13.27] | 4.057 [4.032, 4.082] | 3.371 [3.351, 3.391]; miss (sim/data = 0.312) | close |
+| `lambda_market_sell` | 8.552 [7.149, 9.604] | 4.357 [4.335, 4.38] | 3.363 [3.343, 3.384]; miss (sim/data = 0.3933) | miss (sim/data = 0.5095) |
+| `lambda_market_total` | 19.36 [17.77, 20.6] | 8.415 [8.385, 8.444] | 6.734 [6.708, 6.761]; miss (sim/data = 0.3479) | miss (sim/data = 0.4347) |
 
 The cross-ticker run uses the calibration estimated on SYNTHA's training half and starts the simulation at SYNTHB's median mid-price (10021 ticks); the yardstick is SYNTHB's test half.
 
@@ -382,31 +531,31 @@ The cross-ticker run uses the calibration estimated on SYNTHA's training half an
 
 | run | quantity | data halves | halves, bootstrap upper | calibrated | baseline |
 |---|---|---|---|---|---|
-| SYNTHA | spread W1 (ticks) | 0.0713 | 0.09685 | 0.2257 | 0.2047 |
-| SYNTHA | depth buy TV | 0.06724 | 0.1212 | 0.03534 | 0.02557 |
-| SYNTHA | depth sell TV | 0.06547 | 0.1299 | 0.05147 | 0.01899 |
-| SYNTHB | spread W1 (ticks) | 0.06423 | 0.0841 | 0.223 | 0.1933 |
-| SYNTHB | depth buy TV | 0.148 | 0.1907 | 0.01916 | 0.03432 |
-| SYNTHB | depth sell TV | 0.156 | 0.1969 | 0.03883 | 0.02997 |
-| SYNTHA to SYNTHB | spread W1 (ticks) | 0.06423 | 0.0841 | 0.2201 | 0.1933 |
-| SYNTHA to SYNTHB | depth buy TV | 0.148 | 0.1907 | 0.04406 | 0.03432 |
-| SYNTHA to SYNTHB | depth sell TV | 0.156 | 0.1969 | 0.06119 | 0.02997 |
+| SYNTHA | spread W1 (ticks) | 0.0713 | 0.09685 | 0.228 | 0.2047 |
+| SYNTHA | depth buy TV | 0.06724 | 0.1212 | 0.03305 | 0.02557 |
+| SYNTHA | depth sell TV | 0.06547 | 0.1299 | 0.05246 | 0.01899 |
+| SYNTHB | spread W1 (ticks) | 0.06423 | 0.0841 | 0.2267 | 0.1933 |
+| SYNTHB | depth buy TV | 0.148 | 0.1907 | 0.01966 | 0.03432 |
+| SYNTHB | depth sell TV | 0.156 | 0.1969 | 0.04242 | 0.02997 |
+| SYNTHA to SYNTHB | spread W1 (ticks) | 0.06423 | 0.0841 | 0.2224 | 0.1933 |
+| SYNTHA to SYNTHB | depth buy TV | 0.148 | 0.1907 | 0.042 | 0.03432 |
+| SYNTHA to SYNTHB | depth sell TV | 0.156 | 0.1969 | 0.06145 | 0.02997 |
 
 ### What matches, what is close, what misses
 
-Counts (calibrated flow; baseline in brackets): SYNTHA 30 match, 19 close, 3 miss, 1 undefined (29, 13, 10); SYNTHB 31 match, 16 close, 5 miss, 1 undefined (16, 10, 26); cross-ticker 15 match, 13 close, 24 miss, 1 undefined (16, 10, 26).
+Counts (calibrated flow; baseline in brackets): SYNTHA 30 match, 18 close, 4 miss, 1 undefined (29, 13, 10); SYNTHB 33 match, 14 close, 5 miss, 1 undefined (16, 10, 26); cross-ticker 15 match, 13 close, 24 miss, 1 undefined (16, 10, 26).
 
 The undefined row in every table is `fill_ge10`: no limit order in the data was placed 10 or more ticks from the touch inside the window, so the data has no value for it.
 
-**SYNTHA, matches (30).** Most depth levels on both sides (the other seven are close; the normalised depth profile is within the halves yardstick, as for the baseline), `vol_60s`, kurtosis, nine of the ten autocorrelations of |r| (lag 5 is close), and five of the six order-rate rows (`lambda_limit_buy` is close). The lifetime curves are reproduced: median lifetime by distance bucket, training data / calibrated / baseline, in seconds: <=0 8.21 / 8.48 / 22.08; 1-2 13.54 / 13.29 / 21.14; 3-9 20.86 / 20.75 / 20.95 (the baseline's exponential lifetimes give about 21 s everywhere).
+**SYNTHA, matches (30).** Most depth levels on both sides (the rest are close; the normalised depth profile is within the halves yardstick, as for the baseline), `vol_60s`, kurtosis, eight of the ten autocorrelations of |r| (lags 1 and 5 are close), and all six order-rate rows. The lifetime curves are reproduced: median lifetime by distance bucket, training data / calibrated / baseline, in seconds: <=0 8.21 / 7.69 / 22.08; 1-2 13.54 / 13.63 / 21.14; 3-9 20.86 / 20.77 / 20.95 (the baseline's exponential lifetimes give about 21 s everywhere).
 
-**SYNTHA, close (19).** `vol_1s`, `vol_10s`, the lag-1 bounce, the sign autocorrelations, `executed_share` and the remaining fill probabilities: the gaps are within twice the data interval's half-width. The trade-sign autocorrelation is small in the data (0.04395 at lag 1, from the informed trader: it disappears without it, see the ablation below) and about 0 in the simulation; it reads "close" only because the data interval is wide, not because the flow has sign memory. It is an expected miss by construction.
+**SYNTHA, close (18).** `vol_1s`, `vol_10s`, the lag-1 bounce, the sign autocorrelations at lags 1 and 10, `executed_share`, the remaining fill probabilities and the depth levels not listed above: the gaps are within twice the data interval's half-width. The trade-sign autocorrelation is small in the data (0.04395 at lag 1, from the informed trader: it disappears without it, see the ablation below) and about 0 in the simulation; it reads "close" only because the data interval is wide, not because the flow has sign memory. It is an expected miss by construction.
 
-**SYNTHA, misses (3).** (1) `spread_mean`: data 2.02 ticks, calibrated 1.91 (ratio 0.9452). The baseline misses in the other direction (2.225). (2) `spread_one_tick_share`: 0.01574 of two-sided time at one tick in the data, 0.1839 in the calibrated simulation. The spread PMF is beyond the halves yardstick for both models (W1 0.2257 calibrated, 0.2047 baseline, against an upper bound of 0.09685). (3) `fill_le0`: 0.8855 of the data's orders placed at or inside the touch were filled, 0.6328 in the calibrated simulation.
+**SYNTHA, misses (4).** (1) `spread_mean`: data 2.02 ticks, calibrated 1.916 (ratio 0.9485). The baseline misses in the other direction (2.225). (2) `spread_one_tick_share`: 0.01574 of two-sided time at one tick in the data, 0.1818 in the calibrated simulation. The spread PMF is beyond the halves yardstick for both models (W1 0.228 calibrated, 0.2047 baseline, against an upper bound of 0.09685). (3) `fill_le0`: 0.8855 of the data's orders placed at or inside the touch were filled, 0.6352 in the calibrated simulation. (4) `sign_acf_lag100`: 0.05712 against -0.002384, an expected miss.
 
-**SYNTHB, misses (5)** (stronger informed trader). `spread_one_tick_share` and `fill_le0` miss as on SYNTHA; `spread_mean` is close (2.032 against 1.958). In addition `sign_acf_lag1` is 0.07836 in the data and -0.0009344 in the calibrated simulation, `sign_acf_lag100` is 0.08269 against 0.001336, and `vol_1s` is 5.976e-05 in the data against 8.007e-05 in the simulation. The last one is too *high* in the simulation, so it is not volatility that the flow lacks. The baseline misses far more rows on SYNTHB (26 against 5), mostly because it runs the default noise traders' rates on a day whose noise rate was doubled; it is not a like-for-like contest on this day.
+**SYNTHB, misses (5)** (stronger informed trader). `spread_one_tick_share` and `fill_le0` miss as on SYNTHA; `spread_mean` is close (2.032 against 1.961). In addition `sign_acf_lag1` is 0.07836 in the data and -0.0006877 in the calibrated simulation, `sign_acf_lag100` is 0.08269 against -0.0007549, and `vol_1s` is 5.976e-05 in the data against 8.122e-05 in the simulation. The last one is too *high* in the simulation, so it is not volatility that the flow lacks. The baseline misses far more rows on SYNTHB (26 against 5), mostly because it runs the default noise traders' rates on a day whose noise rate was doubled; it is not a like-for-like contest on this day.
 
-**Cross-ticker, SYNTHA calibration on SYNTHB.** SYNTHB trades about twice as fast as SYNTHA (limit rate 93.91 against 47.89 per second in the simulation), so the rate rows miss by a factor of about two (`lambda_limit_total` ratio 0.51), and the deeper levels of the book are about half as full (`depth_buy_L6` ratio 0.5266). The spread rows miss as in the same-ticker run. This is the expected outcome of a calibration that does not carry over to a faster market: it measures how general the flow is, and here it is not.
+**Cross-ticker, SYNTHA calibration on SYNTHB.** SYNTHB trades about twice as fast as SYNTHA (limit rate 93.91 against 47.86 per second in the simulation), so the rate rows miss by a factor of about two (`lambda_limit_total` ratio 0.5097), and the deeper levels of the book are about half as full (`depth_buy_L6` ratio 0.5233). Both spread rows miss. This is the expected outcome of a calibration that does not carry over to a faster market: it measures how general the flow is, and here it is not.
 
 ### What causes the misses: an ablation (SYNTHETIC)
 
@@ -418,13 +567,13 @@ Each cell: data (test half) / calibrated simulation, verdict.
 
 | metric | full | no_market_maker | no_informed | noise_only |
 |---|---|---|---|---|
-| `spread_mean` | 2.02 / 1.91, miss | 2.348 / 2.37, match | 1.993 / 1.855, close | 2.229 / 2.231, match |
-| `spread_one_tick_share` | 0.01574 / 0.1839, miss | 0.0002525 / 0.01091, miss | 0.028 / 0.2027, miss | 0.0001917 / 0.001232, match |
-| `fill_le0` | 0.8855 / 0.6328, miss | 0.8784 / 0.8846, match | 0.8605 / 0.6567, miss | 0.8577 / 0.8551, match |
-| `executed_share` | 0.1809 / 0.1632, close | 0.1814 / 0.1791, match | 0.1479 / 0.1393, close | 0.1484 / 0.1493, match |
-| `vol_1s` | 6.179e-05 / 6.728e-05, close | 5.431e-05 / 5.978e-05, close | 5.169e-05 / 5.442e-05, match | 4.847e-05 / 4.989e-05, match |
-| `vol_60s` | 0.0001904 / 0.0001266, match | 0.0002094 / 0.0001356, close | 0.0001279 / 0.0001269, match | 0.0001164 / 0.0001222, match |
-| `sign_acf_lag1` | 0.04395 / 0.0003783, close | 0.04585 / 0.0002125, close | 0.007292 / 0.002233, match | 0.005217 / -0.0008797, match |
+| `spread_mean` | 2.02 / 1.916, miss | 2.348 / 2.385, close | 1.993 / 1.862, close | 2.229 / 2.243, match |
+| `spread_one_tick_share` | 0.01574 / 0.1818, miss | 0.0002525 / 0.01076, miss | 0.028 / 0.1978, miss | 0.0001917 / 0.001124, match |
+| `fill_le0` | 0.8855 / 0.6352, miss | 0.8784 / 0.8893, close | 0.8605 / 0.6638, miss | 0.8577 / 0.8591, match |
+| `executed_share` | 0.1809 / 0.1668, close | 0.1814 / 0.1832, match | 0.1479 / 0.1424, close | 0.1484 / 0.1531, close |
+| `vol_1s` | 6.179e-05 / 6.807e-05, close | 5.431e-05 / 6.096e-05, close | 5.169e-05 / 5.579e-05, match | 4.847e-05 / 5.099e-05, close |
+| `vol_60s` | 0.0001904 / 0.000131, match | 0.0002094 / 0.0001414, close | 0.0001279 / 0.0001212, match | 0.0001164 / 0.0001229, match |
+| `sign_acf_lag1` | 0.04395 / -0.0003188, close | 0.04585 / 0.0005688, close | 0.007292 / 0.003771, match | 0.005217 / -0.0008536, match |
 
 **SYNTHB** (SYNTHETIC data, NOT real market data; 20 seeds)
 
@@ -432,17 +581,17 @@ Each cell: data (test half) / calibrated simulation, verdict.
 
 | metric | full | no_market_maker | no_informed | noise_only |
 |---|---|---|---|---|
-| `spread_mean` | 2.032 / 1.958, close | 2.314 / 2.473, miss | 2.014 / 1.884, miss | 2.194 / 2.176, match |
-| `spread_one_tick_share` | 0.01287 / 0.1611, miss | 0.0009608 / 0.002069, match | 0.01035 / 0.1651, miss | 0.0005709 / 0.001569, match |
-| `fill_le0` | 0.8974 / 0.6695, miss | 0.8865 / 0.9117, close | 0.8844 / 0.691, miss | 0.8713 / 0.872, match |
-| `executed_share` | 0.2054 / 0.1845, close | 0.2074 / 0.2019, match | 0.1496 / 0.1381, miss | 0.149 / 0.1462, close |
-| `vol_1s` | 5.976e-05 / 8.007e-05, miss | 6.029e-05 / 7.382e-05, miss | 5.934e-05 / 5.884e-05, match | 5.577e-05 / 5.39e-05, match |
-| `vol_60s` | 0.0003196 / 0.0001301, close | 0.0003268 / 0.0001432, close | 0.0001042 / 0.0001083, match | 0.0001259 / 0.0001099, match |
-| `sign_acf_lag1` | 0.07836 / -0.0009344, miss | 0.08739 / -0.0001079, miss | -0.005137 / 0.002018, match | 0.0004896 / 0.0008112, match |
+| `spread_mean` | 2.032 / 1.961, close | 2.314 / 2.495, miss | 2.014 / 1.886, miss | 2.194 / 2.188, match |
+| `spread_one_tick_share` | 0.01287 / 0.1614, miss | 0.0009608 / 0.002162, match | 0.01035 / 0.1652, miss | 0.0005709 / 0.001615, match |
+| `fill_le0` | 0.8974 / 0.6737, miss | 0.8865 / 0.9133, miss | 0.8844 / 0.6949, miss | 0.8713 / 0.8761, match |
+| `executed_share` | 0.2054 / 0.1885, close | 0.2074 / 0.2063, match | 0.1496 / 0.1416, miss | 0.149 / 0.15, match |
+| `vol_1s` | 5.976e-05 / 8.122e-05, miss | 6.029e-05 / 7.563e-05, miss | 5.934e-05 / 6.086e-05, match | 5.577e-05 / 5.559e-05, match |
+| `vol_60s` | 0.0003196 / 0.0001388, close | 0.0003268 / 0.0001471, close | 0.0001042 / 0.0001128, match | 0.0001259 / 0.0001145, match |
+| `sign_acf_lag1` | 0.07836 / -0.0006877, miss | 0.08739 / 9.425e-05, miss | -0.005137 / 0.001001, match | 0.0004896 / 0.001081, match |
 
-- **The market maker is behind `fill_le0` and the one-tick share.** With it, both miss on both days; without it, `fill_le0` matches or is close and the data's one-tick share is almost zero. With the noise traders alone the calibrated simulation matches the spread, the fills and the volatility, so the generator reproduces a flow of the kind it models. The independent-order flow cannot imitate a market maker's requoted, book-dependent orders even though their measured rates, sizes and lifetimes are part of the calibration.
-- **The synthetic days are not stationary.** The one-tick share falls from 33% (SYNTHA) and 36% (SYNTHB) of the first five minutes to 0% of the last fifteen (17.2% of SYNTHA's training half, 1.6% of its test half). It needs the market maker, whose inventory skew is proportional to the time left in the session, which is consistent with the decline; that mechanism was not isolated further. The calibrated simulation (18.4%) reproduces the half it was fitted on; the test half had changed. An out-of-sample miss of this kind is a property of the day as much as of the flow.
-- **The informed trader is behind the sign memory, and behind `vol_1s` on SYNTHB.** Without it the sign autocorrelation at lag 1 is about zero in the data and matches, and `vol_1s` matches. With it, the simulation is noisier than the data at 1 s and less volatile at 60 s, where the data's volatility is 1.5 times (SYNTHA) and 2.5 times (SYNTHB) the simulation's. A likely reading, not tested: its orders enter the calibrated flow at their measured rate but without their direction, so they add noise instead of trend. The 60 s rows read "match" or "close" only because their data interval is wide.
+- **The market maker is behind `fill_le0` and the one-tick share.** With it, the simulation fills 25 to 28% fewer orders at the touch than the data on both days; without it the gap is +1 to +3% (which the verdict rule still calls a miss on SYNTHB, because both intervals are narrow), and the one-tick share of the data is almost zero. With the noise traders alone every row of the table matches or is close, so the generator reproduces a flow of the kind it models. The independent-order flow cannot imitate a market maker's requoted, book-dependent orders even though their measured rates, sizes and lifetimes are part of the calibration.
+- **The synthetic days are not stationary.** The one-tick share falls from 33% (SYNTHA) and 36% (SYNTHB) of the first five minutes to 0% of the last fifteen (17.2% of SYNTHA's training half, 1.6% of its test half). It needs the market maker, whose inventory skew is proportional to the time left in the session, which is consistent with the decline; that mechanism was not isolated further. The calibrated simulation (18.2%) reproduces the half it was fitted on; the test half had changed. An out-of-sample miss of this kind is a property of the day as much as of the flow.
+- **The informed trader is behind the sign memory, and behind `vol_1s` on SYNTHB.** Without it the sign autocorrelation at lag 1 is about zero in the data and matches, and `vol_1s` matches. With it, the simulation is noisier than the data at 1 s and less volatile at 60 s, where the data's volatility is 1.5 times (SYNTHA) and 2.3 times (SYNTHB) the simulation's. A likely reading, not tested: its orders enter the calibrated flow at their measured rate but without their direction, so they add noise instead of trend. The 60 s rows read "match" or "close" only because their data interval is wide.
 
 Plots (spread PMF, depth profile, survival curves, volatility against sampling interval) are drawn by every run: `build/real_data/calibration/<pair>/plots/`. In them the data survival curve is the training period's Kaplan-Meier curve, because the estimator never reads the test period.
 
@@ -454,7 +603,7 @@ Said plainly, with nothing tuned to hide them:
 
 - **Trade-sign memory and volatility clustering are expected misses.** The calibrated flow is zero-intelligence: each order's side is drawn independently, so the autocorrelation of aggressive-order signs is about zero by construction, while real signs have long memory [9]. Volatility clustering needs state-dependent behaviour the flow does not have. On the synthetic days the sign autocorrelation of the data comes from the informed trader, which the calibrated flow runs without.
 - **No state dependence.** Rates and placements do not depend on the book state, as in queue-reactive models [10], and there is no intraday rate profile. The measured rates are one average over the window.
-- **What the dress rehearsal showed (synthetic).** `spread_one_tick_share` and `fill_le0` miss on both synthetic days, and the spread distribution is beyond the halves yardstick for both models. The ablation in section 8 ties both rows to the market maker: without it `fill_le0` matches or is close and the one-tick share nearly vanishes from both the data and the simulation, and with the noise traders alone nearly everything matches. The share of time at one tick also changes within the day, so part of that miss is the test half differing from the training half. On SYNTHB the informed trader's footprint shows in the sign autocorrelation and in `vol_1s`, which the simulation overstates.
+- **What the dress rehearsal showed (synthetic).** `spread_one_tick_share` and `fill_le0` miss on both synthetic days, and the spread distribution is beyond the halves yardstick for both models. The ablation in section 8 ties both rows to the market maker: without it the fill gap falls from about 25% to at most 3% and the one-tick share nearly vanishes from both the data and the simulation, and with the noise traders alone every row matches or is close. The share of time at one tick also changes within the day, so part of that miss is the test half differing from the training half. On SYNTHB the informed trader's footprint shows in the sign autocorrelation and in `vol_1s`, which the simulation overstates.
 - **Known estimator bias.** With price-window-filtered data, $\lambda_L$ and the far tail of the placement PMF are underestimated (section 3, measured in section 5).
 - **A day where a spread bucket is never visited** gives the estimator nothing for that bucket: the simulator draws from the nearest bucket of the same side that has samples, counts every such draw, and `validate` names the empty buckets (D-385). A side with no placement samples at all is still refused.
 

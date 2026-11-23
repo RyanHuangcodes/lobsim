@@ -40,9 +40,9 @@ A limit order book, matching engine and agent-based trading simulator in C++20, 
 | 1 | Coverage-guided differential fuzzing, injected-bug canaries, CI | Done |
 | 2 | LOBSTER replayer and matching-agreement check | Done; real-data run pending data access |
 | 2b | Dress rehearsal on synthetic LOBSTER-like days, with audit and CI test | Done |
+| 3 | Calibration: order flow measured from LOBSTER data, a calibrated background flow, out-of-sample validation ([CALIBRATION.md](CALIBRATION.md)) | Done on synthetic days; real-data run pending data |
 | 4 | Replay dashboard, deployed to GitHub Pages | Done |
-| 3a | Calibration: order flow measured from LOBSTER data, a calibrated background flow, out-of-sample validation ([CALIBRATION.md](CALIBRATION.md)) | Built and rehearsed on synthetic days; real-data run pending data |
-| 3 | Calibration, and an informed trader that reacts to the size of the mispricing | Next |
+| | An informed trader that reacts to the size of the mispricing | Next |
 | | Reinforcement-learning environment, binary market-data feed, multithreading | Planned |
 
 ## Contents
@@ -464,9 +464,10 @@ The background traders' settings are **measured** from a LOBSTER day (rates, whe
 
 Parameter recovery (the estimator finds parameters we chose ourselves):
 
-<!-- C3 RECOVERY SUMMARY -->
+> **Parameter recovery (synthetic).** Before estimating anything from data, the estimator is tested on a market whose parameters we chose: a hand-made truth is simulated for two hours, exported, estimated and compared. With nothing hidden (40 exported levels), all 14 checks pass: rates within 1.2%, placement TV at most 0.018, size TV below 0.005, lifetime medians within 2.1%, and 10 of 10 further seeds pass. With only 10 levels exported, 13 of those checks pass and the lifetime median of orders 10 or more ticks deep does not: almost every such order is already outside the visible book when it is submitted.
+> With a 10-level price filter like LOBSTER's, the limit-order rate reads 9% low and the far placement tail is lost. Details: [CALIBRATION.md](CALIBRATION.md) section 5.
 
-Dress rehearsal on two **synthetic** fake days (lobsim's own output, not market data; train half, test half): the calibrated flow scores 30 match / 19 close / 3 miss on SYNTHA and 31 / 16 / 5 on SYNTHB, against 29 / 13 / 10 and 16 / 10 / 26 for the old hand-picked noise traders (one row in each is undefined). Depth at every level, the lifetime curves and most order rates match or are close; the one-tick spread share and the fill rate of orders at the touch miss on both days, and the order-sign memory is missed on SYNTHB. An ablation (`scripts/calibration_ablation.sh`) ties the first two to the synthetic days' market maker and the last to their informed trader: calibrated on a day with the noise traders alone, the simulation matches the spread, the fills and the volatility. The baseline on SYNTHB runs at half that day's noise rate, so its large deficit there is not a like-for-like contest. Calibrating on SYNTHA and validating on SYNTHB (a market that trades twice as fast) gives 15 / 13 / 24. These are synthetic results and say nothing about a real market.
+Dress rehearsal on two **synthetic** fake days (lobsim's own output, not market data; train half, test half): the calibrated flow scores 30 match / 18 close / 4 miss on SYNTHA and 33 / 14 / 5 on SYNTHB, against 29 / 13 / 10 and 16 / 10 / 26 for the old hand-picked noise traders (one row in each is undefined). Depth at every level, the lifetime curves and most order rates match or are close; the one-tick spread share and the fill rate of orders at the touch miss on both days, and the order-sign memory is missed on SYNTHB. An ablation (`scripts/calibration_ablation.sh`) ties the first two to the synthetic days' market maker and the last to their informed trader: calibrated on a day with the noise traders alone, the simulation matches the spread, the fills and the volatility. The baseline on SYNTHB runs at half that day's noise rate, so its large deficit there is not a like-for-like contest. Calibrating on SYNTHA and validating on SYNTHB (a market that trades twice as fast) gives 15 / 13 / 24. These are synthetic results and say nothing about a real market.
 
 Real-data calibration: pending data (no LOBSTER files yet).
 
