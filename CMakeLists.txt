@@ -68,6 +68,21 @@ if(NOT LOBSIM_REPLAY_BUG STREQUAL "")
   add_compile_definitions(LOBSIM_REPLAY_BUG_${LOBSIM_REPLAY_BUG}=1 LOBSIM_REPLAY_BUG_BUILD=1)
 endif()
 
+# One injected feed-encoder bug for the feed canary (upgrade 6, src/feed/encoder.cpp). The build
+# holds only lob, orderlog, feed and lobsim_feed. An unknown name stops here, and so does a
+# combination with any other injected bug or the fuzz build.
+set(LOBSIM_FEED_BUG "" CACHE STRING "Feed canary: add_before_exec")
+if(NOT LOBSIM_FEED_BUG STREQUAL "")
+  if(NOT LOBSIM_FEED_BUG STREQUAL "add_before_exec")
+    message(FATAL_ERROR "LOBSIM_FEED_BUG='${LOBSIM_FEED_BUG}' is not add_before_exec")
+  endif()
+  if(LOBSIM_FUZZ OR NOT LOBSIM_INJECT_BUG STREQUAL "" OR NOT LOBSIM_REPLAY_BUG STREQUAL "")
+    message(FATAL_ERROR "LOBSIM_FEED_BUG cannot be combined with LOBSIM_FUZZ, LOBSIM_INJECT_BUG or LOBSIM_REPLAY_BUG: one injected bug per build")
+  endif()
+  string(TOUPPER "${LOBSIM_FEED_BUG}" _lobsim_feed_bug)
+  add_compile_definitions(LOBSIM_FEED_BUG_${_lobsim_feed_bug}=1 LOBSIM_FEED_BUG_BUILD=1)
+endif()
+
 # Warnings apply to our targets only, through this interface target.
 add_library(lobsim_options INTERFACE)
 target_compile_options(lobsim_options INTERFACE -Wall -Wextra -Wpedantic)
@@ -155,6 +170,11 @@ endif()
 # The orders.log codec and the replay: they need only lob, so the fuzz build compiles them too.
 add_library(orderlog STATIC src/sim/order_log.cpp src/sim/replay.cpp)
 target_link_libraries(orderlog PUBLIC lob PRIVATE lobsim_options)
+
+# The binary market-data feed (upgrade 6, FEED.md): the ITCH 5.0 encoder and the book rebuilt from
+# the feed. lob only, never sim. The fuzz build compiles it too, so the feed fuzzer is instrumented.
+add_library(feed STATIC src/feed/encoder.cpp)
+target_link_libraries(feed PUBLIC lob PRIVATE lobsim_options)
 
 # Shared differential driver and the crash-file decoder (upgrade 1).
 add_subdirectory(fuzz)
@@ -360,4 +380,5 @@ add_executable(micro_bench bench/micro_bench.cpp)
 target_link_libraries(micro_bench PRIVATE lob lobsim_options benchmark::benchmark_main)
 
 # Binary market-data feed (upgrade 6, FEED.md): the ITCH 5.0 tests run inside lob_tests.
-target_sources(lob_tests PRIVATE tests/unit/feed_itch_test.cpp)
+target_sources(lob_tests PRIVATE tests/unit/feed_itch_test.cpp tests/unit/feed_encoder_test.cpp)
+target_link_libraries(lob_tests PRIVATE feed)
