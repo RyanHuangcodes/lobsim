@@ -430,3 +430,9 @@ add_test(NAME feed_check_missing_run
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/feed_check_exit.cmake)
 # Every file of fuzz/regressions/feed_parse and fuzz/corpus/feed_parse through run_feed_parse.
 add_test(NAME fuzz_regressions_feed_parse COMMAND fuzz_regression_tests --gtest_filter=FeedParse/*)
+# Benchmarks of the feed: `lobsim_bench --feed` counts its heap allocations, and micro_bench times
+# encode, parse and parse + rebuild (bench/feed_bench.cpp).
+target_link_libraries(lobsim_bench PRIVATE feed)
+add_test(NAME lobsim_bench_feed_smoke COMMAND lobsim_bench --feed --messages 20000)
+target_sources(micro_bench PRIVATE bench/feed_bench.cpp)
+target_link_libraries(micro_bench PRIVATE feed)

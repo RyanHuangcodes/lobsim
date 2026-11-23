@@ -7,6 +7,7 @@
 // hides queueing delay (coordinated omission).
 //
 //   lobsim_bench [--messages N] [--seed S] [--ref-messages M]
+//   lobsim_bench --feed [--messages N] [--seed S]   heap allocations of the ITCH feed (upgrade 6) only
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -19,6 +20,7 @@
 #include <functional>
 #include <new>
 #include <queue>
+#include <span>
 #include <string>
 #include <utility>
 #include <variant>
@@ -29,6 +31,9 @@
 #include <sys/types.h>
 #endif
 
+#include "feed/decoder.hpp"
+#include "feed/encoder.hpp"
+#include "feed/feed_book.hpp"
 #include "lob/apply.hpp"
 #include "lob/events.hpp"
 #include "lob/order_book.hpp"
@@ -534,6 +539,84 @@ std::string compiler() {
 #endif
 }
 
+// ---------------------------------------------------------------- the binary feed (upgrade 6)
+
+// A parse handler that does nothing: parse cost and allocations only.
+struct NullHandler {
+  template <class Msg>
+  bool on(const Msg&) noexcept {
+    return true;
+  }
+  bool on_unknown(std::uint8_t, std::span<const std::byte>) noexcept { return true; }
+};
+
+// Heap allocations of the feed on the same stream (global operator new counted). The engine call
+// is never counted here; each feed step is counted on its own, after a warm-up of the first tenth
+// of the messages (the encoder's buffer and mirror and the parse are sized by then).
+int feed_allocations(std::uint64_t seed, std::uint64_t messages) {
+  Stream stream(seed);
+  OrderBook book{BookConfig{Stream::kMaxPrice}};
+  feed::Encoder enc(nullptr, static_cast<std::size_t>(messages));
+  feed::FeedBook rebuilt(static_cast<std::size_t>(messages));
+  NullHandler null;
+  EventBuffer events;
+  events.reserve(4096);
+  std::vector<Request> block;
+  block.reserve(kBlock);
+  const std::uint64_t warmup = messages / 10;
+  std::uint64_t encode_allocs = 0, parse_allocs = 0, rebuild_allocs = 0, engine_allocs = 0, counted = 0;
+  std::uint64_t feed_messages = 0;
+  const auto count = [](std::uint64_t& total, auto&& step) {
+    const std::uint64_t before = alloc_count::allocs;
+    alloc_count::counting = true;
+    step();
+    alloc_count::counting = false;
+    total += alloc_count::allocs - before;
+  };
+  enc.start(0);
+  feed::parse(enc.buffered(), rebuilt);
+  for (std::uint64_t done = 0; done < messages;) {
+    stream.fill(block, static_cast<std::size_t>(std::min<std::uint64_t>(kBlock, messages - done)));
+    for (const Request& req : block) {
+      const bool measure = done >= warmup;
+      events.clear();
+      std::uint64_t ignored = 0;
+      count(measure ? engine_allocs : ignored, [&] { lob::apply(book, req, events); });
+      count(measure ? encode_allocs : ignored, [&] {
+        enc.clear();
+        enc.on_request(static_cast<std::int64_t>(done), req, events);
+      });
+      count(measure ? parse_allocs : ignored, [&] { feed::parse(enc.buffered(), null); });
+      count(measure ? rebuild_allocs : ignored, [&] { feed::parse(enc.buffered(), rebuilt); });
+      if (rebuilt.failed()) {
+        std::printf("FAIL: the book rebuilt from the feed refused message %" PRIu64 ": %s\n", rebuilt.messages(),
+                    rebuilt.error().c_str());
+        return 1;
+      }
+      if (measure) ++counted;
+      ++done;
+    }
+  }
+  feed_messages = enc.counts().messages();
+  const bool same = feed::book_digest(rebuilt.book()) == feed::book_digest(book);
+  const auto per = [&](std::uint64_t n) { return static_cast<double>(n) / static_cast<double>(std::max<std::uint64_t>(1, counted)); };
+  std::printf("lobsim_bench --feed: heap allocations of the ITCH feed (global operator new counted)\n");
+  std::printf("  stream: seed %" PRIu64 ", %" PRIu64 " messages (the first %" PRIu64 " are the warm-up, not counted); "
+              "%" PRIu64 " feed messages, %" PRIu64 " bytes\n",
+              seed, messages, warmup, feed_messages, enc.counts().bytes);
+  std::printf("  encode (Encoder::on_request)        %" PRIu64 " allocations in %" PRIu64 " messages (%.4f per message)\n",
+              encode_allocs, counted, per(encode_allocs));
+  std::printf("  parse, empty handler                %" PRIu64 " allocations (%.4f per message)\n", parse_allocs,
+              per(parse_allocs));
+  std::printf("  parse + rebuild (FeedBook)          %" PRIu64 " allocations (%.4f per message): std::map nodes of new\n"
+              "                                      price levels, as in the engine\n",
+              rebuild_allocs, per(rebuild_allocs));
+  std::printf("  engine (OrderBook), same messages   %" PRIu64 " allocations (%.4f per message), for comparison\n",
+              engine_allocs, per(engine_allocs));
+  std::printf("  rebuilt book digest %s the engine's\n", same ? "equals" : "DIFFERS FROM");
+  return same ? 0 : 1;
+}
+
 bool parse_u64(const char* s, std::uint64_t& out) {
   char* end = nullptr;
   const unsigned long long v = std::strtoull(s, &end, 10);
@@ -543,7 +626,8 @@ bool parse_u64(const char* s, std::uint64_t& out) {
 }
 
 int usage() {
-  std::fprintf(stderr, "usage: lobsim_bench [--messages N] [--seed S] [--ref-messages M]\n");
+  std::fprintf(stderr, "usage: lobsim_bench [--messages N] [--seed S] [--ref-messages M]\n"
+                       "       lobsim_bench --feed [--messages N] [--seed S]\n");
   return 2;
 }
 
@@ -556,6 +640,7 @@ void print_percentiles(const char* label, const Percentiles& p) {
 
 int main(int argc, char** argv) {
   std::uint64_t messages = 10'000'000, seed = 42, ref_messages = 100'000;
+  bool feed = false;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     auto value = [&](std::uint64_t& out) { return i + 1 < argc && parse_u64(argv[++i], out); };
@@ -565,11 +650,14 @@ int main(int argc, char** argv) {
       if (!value(seed)) return usage();
     } else if (a == "--ref-messages") {
       if (!value(ref_messages)) return usage();
+    } else if (a == "--feed") {
+      feed = true;
     } else {
       return usage();
     }
   }
   if (messages == 0) return usage();
+  if (feed) return feed_allocations(seed, messages);
   ref_messages = std::min(ref_messages, messages);
 
   const std::string env = cpu_model() + "; " + compiler() + "; " + LOBSIM_BUILD_TYPE + "; flags: " + LOBSIM_CXX_FLAGS;
