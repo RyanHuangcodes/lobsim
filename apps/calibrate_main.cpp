@@ -3,6 +3,8 @@
 //   lobsim_calibrate estimate --messages <file> --orderbook <file> [--from S] [--to S]
 //                             [--tick-units auto|N] [--source real|synthetic] [--out <dir>]
 //
+// validate: out-of-sample validation (apps/calibrate_validate.cpp).
+//
 // estimate: measures the order flow of one LOBSTER-format day inside the window [--from, --to)
 // (whole seconds after midnight; default 36000-55800, or the data's whole span when that is not
 // covered and neither bound is given) and writes <out>/<TICKER>_<DATE>_<from>-<to>.json (schema:
@@ -26,6 +28,7 @@
 
 #include "calib/calibration.hpp"
 #include "calib/estimator.hpp"
+#include "calibrate_validate.hpp"
 #include "replay/replayer.hpp"
 
 namespace {
@@ -47,6 +50,7 @@ constexpr std::string_view kEstimateUsage =
 // Every subcommand; a new one is one more line here.
 constexpr Subcommand kSubcommands[] = {
     {"estimate", kEstimateUsage, estimate_command},
+    {"validate", kValidateUsage, validate_command},
 };
 
 void print_usage() {

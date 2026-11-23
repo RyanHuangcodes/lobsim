@@ -188,8 +188,11 @@ target_link_libraries(lobsim_replay PRIVATE sim lobsim_options)
 # LOBSTER replay (upgrade 2): the replayer, and the exporter that turns a simulator run into LOBSTER files.
 add_executable(lobsim_lobster apps/lobster_main.cpp)
 target_link_libraries(lobsim_lobster PRIVATE replay lobsim_options)
+# The exporter's core is a library (upgrade 3, C5) so that `lobsim_calibrate validate` can export simulations in-process.
+add_library(lobster_export STATIC src/sim/lobster_export.cpp)
+target_link_libraries(lobster_export PUBLIC orderlog replay lob PRIVATE lobsim_options)
 add_executable(lobsim_export_lobster apps/export_lobster_main.cpp)
-target_link_libraries(lobsim_export_lobster PRIVATE orderlog replay lobsim_options)
+target_link_libraries(lobsim_export_lobster PRIVATE lobster_export lobsim_options)
 
 enable_testing()
 add_subdirectory(viz)
@@ -273,8 +276,10 @@ add_dependencies(calib calib_git_commit)
 target_include_directories(calib PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(calib PUBLIC replay lob calibfile PRIVATE lobsim_options)
 
-add_executable(lobsim_calibrate apps/calibrate_main.cpp)
-target_link_libraries(lobsim_calibrate PRIVATE calib lobsim_options)
+add_executable(lobsim_calibrate apps/calibrate_main.cpp apps/calibrate_validate.cpp)
+target_include_directories(lobsim_calibrate PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
+target_link_libraries(lobsim_calibrate PRIVATE calib calibvalidate lobsim_options)
+target_compile_definitions(lobsim_calibrate PRIVATE LOBSIM_PLOT_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/tools/plot_calibration.py")
 
 add_executable(calib_estimator_tests tests/unit/calib_estimator_test.cpp tests/unit/replay_observer_test.cpp)
 target_link_libraries(calib_estimator_tests PRIVATE calib lobsim_options GTest::gtest_main)
@@ -428,3 +433,21 @@ add_executable(fingerprint_tests tests/unit/fingerprint_test.cpp)
 target_link_libraries(fingerprint_tests PRIVATE fingerprint lobsim_options GTest::gtest_main)
 target_compile_definitions(fingerprint_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 gtest_discover_tests(fingerprint_tests)
+
+# Out-of-sample validation (upgrade 3, C5): `lobsim_calibrate validate`. The estimator is injected (calib::EstimateFn), so
+# the library does not link it; the command line does.
+add_library(calibvalidate STATIC src/calib/validate.cpp src/calib/validate_report.cpp)
+target_include_directories(calibvalidate PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+find_package(Threads REQUIRED)
+target_link_libraries(calibvalidate PUBLIC fingerprint lobster_export sim calibfile Threads::Threads PRIVATE lobsim_options)
+add_executable(calib_validate_tests tests/unit/calib_validate_test.cpp)
+target_link_libraries(calib_validate_tests PRIVATE calibvalidate calib lobsim_options GTest::gtest_main)
+target_compile_definitions(calib_validate_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+gtest_discover_tests(calib_validate_tests)
+add_test(NAME calibrate_validate_e2e
+  COMMAND ${CMAKE_COMMAND}
+    -DRUN=$<TARGET_FILE:lobsim_run> -DEXPORT=$<TARGET_FILE:lobsim_export_lobster>
+    -DCALIBRATE=$<TARGET_FILE:lobsim_calibrate>
+    -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calib/noise_only_day.json
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/calibrate_validate_e2e
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/calibrate_validate_e2e.cmake)
