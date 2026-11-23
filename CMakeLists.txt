@@ -428,3 +428,5 @@ add_test(NAME feed_check_missing_run
   COMMAND ${CMAKE_COMMAND} -DFEED=$<TARGET_FILE:lobsim_feed>
     -DRUN_DIR=${CMAKE_CURRENT_BINARY_DIR}/feed_no_such_run -DEXPECT=1
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/feed_check_exit.cmake)
+# Every file of fuzz/regressions/feed_parse and fuzz/corpus/feed_parse through run_feed_parse.
+add_test(NAME fuzz_regressions_feed_parse COMMAND fuzz_regression_tests --gtest_filter=FeedParse/*)

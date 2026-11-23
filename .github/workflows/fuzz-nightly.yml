@@ -36,6 +36,12 @@ jobs:
           ./build-fuzz/fuzz/fuzz_replay_parse fuzz-work/replay_parse fuzz/corpus/replay_parse \
             -max_len=4096 -max_total_time=600 -timeout=10 \
             -artifact_prefix=fuzz-artifacts/ -print_final_stats=1
+      - name: Fuzz ITCH feed parser (10 min)
+        run: |
+          mkdir -p fuzz-work/feed_parse fuzz-artifacts
+          ./build-fuzz/fuzz/fuzz_feed_parse fuzz-work/feed_parse fuzz/corpus/feed_parse \
+            -max_len=70000 -max_total_time=600 -timeout=10 \
+            -artifact_prefix=fuzz-artifacts/ -print_final_stats=1
       - name: Compute date
         if: always()
         id: date

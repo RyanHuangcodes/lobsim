@@ -19,7 +19,8 @@ std::string ref_text(std::uint64_t ref) { return "order ref " + std::to_string(r
 
 }  // namespace
 
-FeedBook::FeedBook(std::size_t expected_refs) : book_(lob::BookConfig{kMaxTicks}) {
+FeedBook::FeedBook(std::size_t expected_refs, std::uint64_t max_ref)
+    : book_(lob::BookConfig{kMaxTicks}), max_ref_(max_ref) {
   ref_to_book_.reserve(expected_refs + 1);
 }
 
@@ -50,7 +51,9 @@ bool FeedBook::on(const MsgS& m) {
 bool FeedBook::on(const MsgA& m) {
   if (!enter('A')) return false;
   if (lookup(m.ref) != 0) return fail('A', ref_text(m.ref) + " is already resting");
-  if (m.ref >= kMaxRef) return fail('A', ref_text(m.ref) + " is beyond the dense reference index (2^26)");
+  if (m.ref >= max_ref_) {
+    return fail('A', ref_text(m.ref) + " is beyond the dense reference index (" + std::to_string(max_ref_) + ")");
+  }
   if (m.side != 'B' && m.side != 'S') return fail('A', "side is neither B nor S");
   if (m.price % 100 != 0) return fail('A', "price " + std::to_string(m.price) + " is not a whole number of cents");
   const lob::Side side = m.side == 'B' ? lob::Side::Buy : lob::Side::Sell;

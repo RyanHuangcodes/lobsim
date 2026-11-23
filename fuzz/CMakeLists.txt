@@ -24,3 +24,13 @@ else()
   add_executable(lobsim_fuzz_decode decode_tool.cpp)
   target_link_libraries(lobsim_fuzz_decode PRIVATE fuzz_driver lobsim_options)
 endif()
+
+# The ITCH feed parser (upgrade 6): its shared check joins the driver library, and a libFuzzer
+# target in the fuzz build.
+target_sources(fuzz_driver PRIVATE feed_parse_driver.cpp)
+target_link_libraries(fuzz_driver PUBLIC feed)
+if(LOBSIM_FUZZ)
+  add_executable(fuzz_feed_parse fuzz_feed_parse.cpp)
+  target_link_libraries(fuzz_feed_parse PRIVATE fuzz_driver lobsim_options)
+  target_link_options(fuzz_feed_parse PRIVATE -fsanitize=fuzzer,address,undefined)
+endif()

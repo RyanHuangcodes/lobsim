@@ -118,6 +118,25 @@ jobs:
           name: fuzz-smoke-artifacts
           path: fuzz-artifacts/
           if-no-files-found: ignore
+      - name: Fuzz ITCH feed parser (60 s)
+        run: |
+          n=$(nm build-fuzz/libfeed.a | grep -c __sanitizer_cov || true)
+          echo "build-fuzz/libfeed.a: $n __sanitizer_cov references"
+          if [ "$n" -eq 0 ]; then
+            echo "FAIL: build-fuzz/libfeed.a has no fuzzer instrumentation"
+            exit 1
+          fi
+          mkdir -p fuzz-work/feed_parse fuzz-artifacts-feed
+          ./build-fuzz/fuzz/fuzz_feed_parse fuzz-work/feed_parse fuzz/corpus/feed_parse \
+            -max_len=70000 -max_total_time=60 -timeout=10 \
+            -artifact_prefix=fuzz-artifacts-feed/ -print_final_stats=1
+      - name: Upload feed parser crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-smoke-feed-artifacts
+          path: fuzz-artifacts-feed/
+          if-no-files-found: ignore
 
   fuzz-canary:
     name: fuzz-canary (${{ matrix.bug }})
@@ -325,3 +344,34 @@ jobs:
         with:
           name: cov-html
           path: cov-html/
+
+  # The binary feed (upgrade 6): the encoder built with LOBSIM_FEED_BUG=add_before_exec publishes a
+  # taker's A before its executions, and the book rebuilt from the feed must refuse it (exit code 2 on
+  # the exporter fixture, a crossing-A mismatch in the differential stream). The normal build is the
+  # control: the same inputs, and a closed-loop run, must check clean.
+  feed-canary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure the canary build
+        run: >
+          cmake -S . -B build-feed-canary
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=gcc-14
+          -DCMAKE_CXX_COMPILER=g++-14
+          -DLOBSIM_WERROR=ON
+          -DLOBSIM_FEED_BUG=add_before_exec
+      - name: Build the canary
+        run: cmake --build build-feed-canary -j "$(nproc)"
+      - name: The bug must be caught (lobsim_feed check exits 2, the differential stream stops on the feed)
+        run: ctest --test-dir build-feed-canary --output-on-failure --no-tests=error -V
+      - name: Control, no bug - the same inputs and a closed-loop run must check clean (exit code 0)
+        run: |
+          cmake -S . -B build-normal -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14
+          cmake --build build-normal -j "$(nproc)" --target lobsim_run lobsim_feed fuzz_diff
+          build-normal/lobsim_feed check --run tests/fixtures/lobster_export
+          build-normal/fuzz_diff --seed 1 --messages 10000
+          build-normal/lobsim_run --config configs/default.json --seed 7 --duration-s 60 --out closed-loop/run
+          build-normal/lobsim_feed check --run closed-loop/run

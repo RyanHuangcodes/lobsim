@@ -25,3 +25,7 @@ Seeds for `fuzz_replay_parse`, whose input is the text of an `orders.log`. `empt
 ## lobster_parse/
 
 Hand-written seeds for `fuzz_lobster_parse`, whose input is lines of LOBSTER text, each tried as a message line and as an orderbook line. `message_a.csv` and `message_b.csv` hold 20 valid message lines (types 1 to 7, fractions of 0, 1, 3 and 9 digits); `book_l10.csv`, `book_l10_empty_levels.csv`, `book_l5.csv` and `book_l1.csv` hold 20 valid orderbook lines (L = 10, 5 and 1; empty levels use 9999999999 / -9999999999 with size 0). `malformed.csv` has wrong column counts, a 12-digit fraction, direction 0 on type 7 and type 4, a negative size, a non-monotone book row and an overflowing time; `crlf.csv` has CRLF line ends.
+
+## feed_parse/
+
+Seeds for `fuzz_feed_parse`, whose input is an ITCH 5.0 feed file (upgrade 6, [FEED.md](../../FEED.md)). They are written by `python3 fuzz/make_feed_seeds.py`. The five `golden_*.itch` files hold one hand-checked message each (S O, A, E, X, D; the same bytes as `tests/unit/feed_itch_test.cpp`). `golden_feed.itch` is a valid six-message feed. `closed_loop_2000.itch` is the first 2,000 messages of the feed of the 60 s seed-7 run; FUZZING.md has the commands that made it.

@@ -26,7 +26,8 @@ class FeedBook {
   // References index a vector (D-302); a reference this large is refused instead of allocated.
   static constexpr std::uint64_t kMaxRef = std::uint64_t{1} << 26;
 
-  explicit FeedBook(std::size_t expected_refs = 0);
+  // max_ref: references at or above it are refused (the fuzz target uses a small one).
+  explicit FeedBook(std::size_t expected_refs = 0, std::uint64_t max_ref = kMaxRef);
   FeedBook(const FeedBook&) = delete;
   FeedBook& operator=(const FeedBook&) = delete;
 
@@ -56,6 +57,7 @@ class FeedBook {
 
   lob::OrderBook book_;
   std::vector<lob::OrderId> ref_to_book_;  // 0 when the reference is not resting
+  std::uint64_t max_ref_;
   std::uint64_t messages_{0};
   std::uint64_t executed_shares_{0};
   bool open_{false};
