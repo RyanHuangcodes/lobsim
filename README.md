@@ -27,6 +27,7 @@ A limit order book, matching engine and agent-based trading simulator in C++20, 
 - **Fuzzing and CI** ([FUZZING.md](FUZZING.md)): libFuzzer targets for the engine and both parsers, injected-bug canaries that CI requires the fuzzer to catch, and a nightly fuzz run.
 - **LOBSTER replay** ([REAL_DATA.md](REAL_DATA.md)): `lobsim_lobster` rebuilds the book from a LOBSTER message file, compares it with the published book after every message, and checks lobsim's matching rule against every burst of executions. Tested on synthetic data so far; real Nasdaq results are pending.
 - **Dress rehearsal**: two synthetic LOBSTER-like fake days (full opening book, hidden executions, a halt, price-window filtering) with an audit that explains every discrepancy, run in CI.
+- **Calibration** ([CALIBRATION.md](CALIBRATION.md)): `lobsim_calibrate` measures the order flow (rates, placement, sizes, lifetimes) from a LOBSTER day, a calibrated background agent reproduces it in the simulator, and `validate` tests the result on a later period the estimator never reads. Rehearsed on synthetic days; real-data results are pending.
 - **Replay dashboard** ([DASHBOARD.md](DASHBOARD.md)): `lobsim_viz_export` turns a run into a compact bundle after re-verifying its event hash and PnL, and a no-build static web app replays it. GitHub Actions rebuilds and deploys it to GitHub Pages on every push to `main`.
 
 `SPEC.md` is the original specification and `DECISIONS.md` records every decision the specification left open, one line each with the reason.
@@ -40,6 +41,7 @@ A limit order book, matching engine and agent-based trading simulator in C++20, 
 | 2 | LOBSTER replayer and matching-agreement check | Done; real-data run pending data access |
 | 2b | Dress rehearsal on synthetic LOBSTER-like days, with audit and CI test | Done |
 | 4 | Replay dashboard, deployed to GitHub Pages | Done |
+| 3a | Calibration: order flow measured from LOBSTER data, a calibrated background flow, out-of-sample validation ([CALIBRATION.md](CALIBRATION.md)) | Built and rehearsed on synthetic days; real-data run pending data |
 | 3 | Calibration, and an informed trader that reacts to the size of the mispricing | Next |
 | | Reinforcement-learning environment, binary market-data feed, multithreading | Planned |
 
@@ -56,6 +58,7 @@ A limit order book, matching engine and agent-based trading simulator in C++20, 
 - [Continuous integration](#continuous-integration)
 - [How correctness is verified](#how-correctness-is-verified)
 - [Real-data replay (data pending)](#real-data-replay-data-pending)
+- [Calibration (data pending)](#calibration-data-pending)
 - [Live dashboard](#live-dashboard)
 - [What is not modelled](#what-is-not-modelled)
 
@@ -455,6 +458,20 @@ Three numbers from the **synthetic** closed loop (lobsim's own simulator, seed 7
 
 Dress rehearsal on two **synthetic** LOBSTER-like fake days (one simulated hour each, book already full at the start, hidden executions, a halt, price-window filtering; not market data), run through `scripts/run_real_data.sh`: without the price-window filter there is no level-1 correction and every scored burst agrees (SYNTHA 30,403 of 30,403 at trust depth 3); with it, level-1 corrections (2,807 in SYNTHA) and agreement below 100% (87.71%) appear, and `tools/lobster_audit.py` traces every one of them to a delete the filter dropped, which real LOBSTER files drop too. Details, the canaries and the CI test `lobster_dress_rehearsal`: [REAL_DATA.md](REAL_DATA.md#dress-rehearsal-on-synthetic-lobster-like-data-not-real-market-data).
 
+## Calibration (data pending)
+
+The background traders' settings are **measured** from a LOBSTER day (rates, where orders are placed, sizes, lifetimes), with no optimizer, and the result is then **validated out of sample**: the simulator is run on those inputs and its emergent spread, depth, volatility and fill rates are compared with a later period of the data that the estimator never reads. Moment matching and a stylized-facts-only check are not enough, so the two steps are kept apart.
+
+Parameter recovery (the estimator finds parameters we chose ourselves):
+
+<!-- C3 RECOVERY SUMMARY -->
+
+Dress rehearsal on two **synthetic** fake days (lobsim's own output, not market data; train half, test half): the calibrated flow scores 30 match / 19 close / 3 miss on SYNTHA and 31 / 16 / 5 on SYNTHB, against 29 / 13 / 10 and 16 / 10 / 26 for the old hand-picked noise traders (one row in each is undefined). Depth at every level, the lifetime curves and most order rates match or are close; the one-tick spread share and the fill rate of orders at the touch miss on both days (the fake days' market maker keeps the spread wide, the calibrated flow has none), and the order-sign memory the informed trader creates on SYNTHB is missed, as expected of a zero-intelligence flow. Calibrating on SYNTHA and validating on SYNTHB (a market that trades twice as fast) gives 15 / 13 / 24. These are synthetic results and say nothing about a real market.
+
+Real-data calibration: pending data (no LOBSTER files yet).
+
+With files in `data/lobster/`, `scripts/run_real_data.sh --calibrate` runs it on every ticker. Method, definitions, every censoring rule, the dress-rehearsal tables and the known gaps: [CALIBRATION.md](CALIBRATION.md).
+
 ## Live dashboard
 
 [ryanhuangcodes.github.io/lobsim/?run=demo](https://ryanhuangcodes.github.io/lobsim/?run=demo)
@@ -472,6 +489,7 @@ Before writing a bundle, `lobsim_viz_export` rebuilds the book from `orders.log`
 - No stop, iceberg or hidden orders.
 - No decrement-and-cancel self-trade prevention.
 - No real market data feeds the simulator. A LOBSTER replayer exists (see above) but has not been run on real data.
+- Order signs have no memory (the calibrated flow draws every side independently) and rates do not depend on the book state; both are measured gaps, see [CALIBRATION.md](CALIBRATION.md#9-known-gaps).
 - Agents do not learn or adapt, and the fundamental value is a driftless random walk with constant volatility.
 - Fees enter only the market maker's accounting; no agent decides anything based on them.
 

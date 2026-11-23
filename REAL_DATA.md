@@ -172,7 +172,7 @@ No LOBSTER files were found, so **no calibration was run and no real-data calibr
 scripts/run_real_data.sh --calibrate
 ```
 
-The synthetic dress rehearsal of the same code path (not real data) is in `docs/calibration_dress_rehearsal.md`.
+The synthetic dress rehearsal of the same code path (not real data) is in `CALIBRATION.md`.
 <!-- CALIBRATION:END -->
 
 **No real data has been replayed, and the marked block above holds no numbers on purpose.**

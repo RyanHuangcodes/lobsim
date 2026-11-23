@@ -157,7 +157,7 @@ def pending_body(data_dir, root):
         "scripts/run_real_data.sh --calibrate",
         "```",
         "",
-        "The synthetic dress rehearsal of the same code path (not real data) is in `docs/calibration_dress_rehearsal.md`.",
+        "The synthetic dress rehearsal of the same code path (not real data) is in `CALIBRATION.md`.",
     ])
 
 
