@@ -3,11 +3,21 @@
 # a report file, between <!-- REAL-DATA:BEGIN --> and <!-- REAL-DATA:END -->.
 #
 #   scripts/run_real_data.sh [--data-dir DIR] [--report FILE] [--out DIR] [--bin PATH]
+#   scripts/run_real_data.sh --calibrate [--train A-B] [--test C-D] [--seeds N] [--calibrate-bin PATH] [other options]
 #
 #   --data-dir  folder holding the LOBSTER files            (default data/lobster/)
 #   --report    file whose marked block is replaced         (default REAL_DATA.md; markers added if missing)
 #   --out       where each run's summary.json is kept       (default build/real_data/)
 #   --bin       the lobsim_lobster binary                   (default: first of build/release, build/debug)
+#
+# With --calibrate it does not replay: it runs lobsim_calibrate validate (estimate on the training period,
+# simulate the calibrated flow and the old noise traders, compare both with the test period) on every pair and
+# writes the scorecards between <!-- CALIBRATION:BEGIN --> and <!-- CALIBRATION:END --> (markers added if missing;
+# the REAL-DATA block is left alone). Windows: --train/--test (seconds after midnight), default 36000-45900 and
+# 45900-55800, or the data's span split in half when the data does not cover those. With two or more tickers it
+# also calibrates on the first and validates on each of the others (start price: the validated ticker's median
+# mid). Results of each run: <out>/calibration/<pair>/ (validation.md, validation.json, plots). Exit codes as below;
+# no data writes "Calibration pending data" and exits 3.
 #
 # Per pair it runs strict, report and resync mode (default compare and trust depths) and keeps
 # <out>/<pair>/<mode>/summary.json and divergences.csv. Exit codes: 0 all runs done (a strict-mode
@@ -19,17 +29,27 @@ data_dir="$root/data/lobster"
 report="$root/REAL_DATA.md"
 out="$root/build/real_data"
 bin=""
+calibrate=0
+train=""
+test=""
+seeds=20
+cbin=""
 
 die() { echo "run_real_data.sh: $*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
+  if [ "$1" = "--calibrate" ]; then calibrate=1; shift; continue; fi
   [ $# -ge 2 ] || die "$1 needs a value"
   case "$1" in
+    --train) train="$2" ;;
+    --test) test="$2" ;;
+    --seeds) seeds="$2" ;;
+    --calibrate-bin) cbin="$2" ;;
     --data-dir) data_dir="$2" ;;
     --report) report="$2" ;;
     --out) out="$2" ;;
     --bin) bin="$2" ;;
-    *) die "unknown argument $1 (usage: run_real_data.sh [--data-dir DIR] [--report FILE] [--out DIR] [--bin PATH])" ;;
+    *) die "unknown argument $1 (usage: run_real_data.sh [--calibrate [--train A-B] [--test C-D] [--seeds N] [--calibrate-bin PATH]] [--data-dir DIR] [--report FILE] [--out DIR] [--bin PATH])" ;;
   esac
   shift 2
 done
@@ -39,7 +59,7 @@ if [ -z "$bin" ]; then
     if [ -x "$candidate" ]; then bin="$candidate"; break; fi
   done
 fi
-[ -n "$bin" ] && [ -x "$bin" ] || die "no lobsim_lobster binary: build one (cmake --preset release && cmake --build --preset release) or pass --bin PATH"
+[ "$calibrate" -eq 1 ] || { [ -n "$bin" ] && [ -x "$bin" ]; } || die "no lobsim_lobster binary: build one (cmake --preset release && cmake --build --preset release) or pass --bin PATH"
 command -v python3 >/dev/null || die "python3 is needed to write the report"
 
 # Every <stem>_message_<L>.csv with a <stem>_orderbook_<L>.csv next to it.
@@ -163,6 +183,72 @@ with open(report, "w") as f:
     f.write(text)
 PY
 }
+
+# --calibrate: lobsim_calibrate validate on every pair, and the cross-ticker check. Returns the exit code.
+run_calibration() {
+  local tools="$root/tools/calibration_report.py"
+  if [ "${#pairs[@]}" -eq 0 ]; then
+    python3 "$tools" pending --report "$report" --data-dir "$data_dir" --root "$root" || die "could not write $report"
+    echo "run_real_data.sh: no LOBSTER message/orderbook pairs in $data_dir; wrote 'Calibration pending data' to $report" >&2
+    return 3
+  fi
+  if [ -z "$cbin" ]; then
+    for candidate in "${bin:+$(dirname "$bin")/lobsim_calibrate}" "$root/build/release/lobsim_calibrate" "$root/build/debug/lobsim_calibrate"; do
+      if [ -n "$candidate" ] && [ -x "$candidate" ]; then cbin="$candidate"; break; fi
+    done
+  fi
+  [ -n "$cbin" ] && [ -x "$cbin" ] || die "no lobsim_calibrate binary: build one (cmake --preset release && cmake --build --preset release) or pass --calibrate-bin PATH"
+  local cdir="$out/calibration" manifest="$out/calibration/manifest.tsv" status=0
+  mkdir -p "$cdir" || die "cannot create $cdir"
+  : > "$manifest"
+  local stems=() dirs=() trains=() tests=() msgs=()
+  local m ob stem win train_w test_w rest note dir rc
+  for m in "${pairs[@]}"; do
+    ob="${m/_message_/_orderbook_}"
+    stem="$(basename "$m" .csv)"
+    stem="${stem/_message_/_}"
+    win="$(python3 "$tools" windows --messages "$m" ${train:+--train "$train"} ${test:+--test "$test"})" || { echo "run_real_data.sh: cannot choose windows for $stem" >&2; status=1; continue; }
+    train_w="${win%% *}"; rest="${win#* }"; test_w="${rest%% *}"; note="${rest#* }"
+    dir="$cdir/$stem"
+    echo "== $stem: validate (train $train_w, test $test_w; $note)"
+    "$cbin" validate --messages "$m" --orderbook "$ob" --train "$train_w" --test "$test_w" --seeds "$seeds" --out "$dir"
+    rc=$?
+    [ "$rc" -eq 0 ] || { echo "run_real_data.sh: lobsim_calibrate validate exited with $rc on $stem" >&2; status=1; }
+    printf 'same\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$stem" "$dir" "$train_w" "$test_w" "$note" "$rc" "" >> "$manifest"
+    stems+=("$stem"); dirs+=("$dir"); trains+=("$train_w"); tests+=("$test_w"); msgs+=("$m")
+  done
+  # Cross-ticker: calibrate on the first ticker, validate on each of the others, starting at the other's median mid.
+  local i cal mid
+  if [ "${#stems[@]}" -ge 2 ]; then
+    cal="$(find "${dirs[0]}" -maxdepth 1 -name '*.json' ! -name validation.json | sort | head -n 1)"
+    if [ -z "$cal" ]; then
+      echo "run_real_data.sh: no calibration file in ${dirs[0]}; cross-ticker check skipped" >&2
+    else
+      for ((i = 1; i < ${#stems[@]}; i++)); do
+        local bcal
+        bcal="$(find "${dirs[$i]}" -maxdepth 1 -name '*.json' ! -name validation.json | sort | head -n 1)"
+        [ -n "$bcal" ] || { echo "run_real_data.sh: no calibration file in ${dirs[$i]}; cross-ticker ${stems[0]} to ${stems[$i]} skipped" >&2; continue; }
+        mid="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["median_mid_ticks"])' "$bcal")" || { status=1; continue; }
+        dir="$cdir/cross_${stems[0]}_to_${stems[$i]}"
+        echo "== cross-ticker: calibrated on ${stems[0]}, validated on ${stems[$i]} (start price $mid ticks)"
+        "$cbin" validate --messages "${msgs[$i]}" --orderbook "${msgs[$i]/_message_/_orderbook_}" --train "${trains[$i]}" --test "${tests[$i]}" \
+          --seeds "$seeds" --calibration "$cal" --start-price "$mid" --out "$dir"
+        rc=$?
+        [ "$rc" -eq 0 ] || { echo "run_real_data.sh: cross-ticker validate exited with $rc" >&2; status=1; }
+        printf 'cross\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "calibrated on ${stems[0]}, validated on ${stems[$i]}" "$dir" "${trains[$i]}" "${tests[$i]}" \
+          "calibration of ${stems[0]} (estimated on its own training period); start price ${mid} ticks, the median mid of ${stems[$i]}" "$rc" "" >> "$manifest"
+      done
+    fi
+  fi
+  python3 "$tools" report --report "$report" --manifest "$manifest" --data-dir "$data_dir" --seeds "$seeds" --root "$root" || die "could not write $report"
+  echo "run_real_data.sh: wrote the calibration results of ${#stems[@]} pair(s) to $report"
+  return $status
+}
+
+if [ "$calibrate" -eq 1 ]; then
+  run_calibration
+  exit $?
+fi
 
 if [ "${#pairs[@]}" -eq 0 ]; then
   render missing || die "could not write $report"

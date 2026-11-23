@@ -451,3 +451,11 @@ add_test(NAME calibrate_validate_e2e
     -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calib/noise_only_day.json
     -DOUT=${CMAKE_CURRENT_BINARY_DIR}/calibrate_validate_e2e
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/calibrate_validate_e2e.cmake)
+add_test(NAME real_data_calibrate_script
+  COMMAND ${CMAKE_COMMAND}
+    -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_real_data.sh -DLOBSTER=$<TARGET_FILE:lobsim_lobster>
+    -DRUN=$<TARGET_FILE:lobsim_run> -DEXPORT=$<TARGET_FILE:lobsim_export_lobster>
+    -DCALIBRATE=$<TARGET_FILE:lobsim_calibrate>
+    -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calib/noise_only_day.json
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/real_data_calibrate_script
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_real_data_calibrate.cmake)

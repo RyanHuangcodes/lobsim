@@ -155,6 +155,26 @@ scripts/run_real_data.sh
 LOBSTER data needs a LOBSTER account, a university subscription, an approved trial, or the sample that comes with the book *Trades, Quotes and Prices*.
 <!-- REAL-DATA:END -->
 
+<!-- CALIBRATION:BEGIN -->
+### Calibration pending data
+
+No LOBSTER files were found, so **no calibration was run and no real-data calibration result exists**. Nothing is reported here on purpose.
+
+- Expected file names, one pair per ticker and day (L is the number of levels):
+  `<TICKER>_<DATE>_34200000_57600000_message_<L>.csv` and
+  `<TICKER>_<DATE>_34200000_57600000_orderbook_<L>.csv`, for example
+  `INTC_2012-06-21_34200000_57600000_message_10.csv` and
+  `INTC_2012-06-21_34200000_57600000_orderbook_10.csv`.
+- Put them in the folder `data/lobster/` (it is not tracked by git).
+- Run one command. For every ticker it estimates the order flow on 10:00-12:45, simulates it (and the old noise traders as a baseline) for 20 seeds, and compares both with 12:45-15:30 of the data, which the estimator never reads; with two or more tickers it also calibrates on the first and validates on each of the others. It replaces this block with the scorecards:
+
+```
+scripts/run_real_data.sh --calibrate
+```
+
+The synthetic dress rehearsal of the same code path (not real data) is in `docs/calibration_dress_rehearsal.md`.
+<!-- CALIBRATION:END -->
+
 **No real data has been replayed, and the marked block above holds no numbers on purpose.**
 `scripts/run_real_data.sh` replaces it with the results of every pair in `data/lobster/`. The results are
 expected to cover, for at least two tickers, from the three modes above:
