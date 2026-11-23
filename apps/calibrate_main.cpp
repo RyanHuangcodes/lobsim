@@ -28,6 +28,7 @@
 
 #include "calib/calibration.hpp"
 #include "calib/estimator.hpp"
+#include "calibrate_compare.hpp"
 #include "calibrate_validate.hpp"
 #include "replay/replayer.hpp"
 
@@ -50,6 +51,7 @@ constexpr std::string_view kEstimateUsage =
 // Every subcommand; a new one is one more line here.
 constexpr Subcommand kSubcommands[] = {
     {"estimate", kEstimateUsage, estimate_command},
+    {"compare", calibrate_cli::kCompareUsage, calibrate_cli::compare_command},
     {"validate", kValidateUsage, validate_command},
 };
 

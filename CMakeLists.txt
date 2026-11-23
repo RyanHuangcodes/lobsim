@@ -271,20 +271,39 @@ add_custom_target(calib_git_commit
   BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/generated/calib_git_commit.hpp
   VERBATIM)
 add_library(calib STATIC src/calib/estimator.cpp src/calib/estimator_stats.cpp src/calib/estimator_report.cpp
-  src/calib/sha256.cpp src/calib/build_commit.cpp)
+  src/calib/sha256.cpp src/calib/build_commit.cpp src/calib/recovery.cpp)
 add_dependencies(calib calib_git_commit)
 target_include_directories(calib PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(calib PUBLIC replay lob calibfile PRIVATE lobsim_options)
 
-add_executable(lobsim_calibrate apps/calibrate_main.cpp apps/calibrate_validate.cpp)
+add_executable(lobsim_calibrate apps/calibrate_main.cpp apps/calibrate_compare.cpp apps/calibrate_validate.cpp)
 target_include_directories(lobsim_calibrate PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
 target_link_libraries(lobsim_calibrate PRIVATE calib calibvalidate lobsim_options)
 target_compile_definitions(lobsim_calibrate PRIVATE LOBSIM_PLOT_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/tools/plot_calibration.py")
 
-add_executable(calib_estimator_tests tests/unit/calib_estimator_test.cpp tests/unit/replay_observer_test.cpp)
+add_executable(calib_estimator_tests tests/unit/calib_estimator_test.cpp tests/unit/replay_observer_test.cpp
+  tests/unit/calib_recovery_test.cpp)
 target_link_libraries(calib_estimator_tests PRIVATE calib lobsim_options GTest::gtest_main)
 target_compile_definitions(calib_estimator_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 gtest_discover_tests(calib_estimator_tests)
+
+# Parameter recovery, CI version (upgrade 3, C3): 20 minutes of the hand-made truth, simulated,
+# exported unfiltered, estimated and compared with the truth at twice the tolerances.
+add_test(NAME calibration_recovery
+  COMMAND ${CMAKE_COMMAND}
+    -DRUN=$<TARGET_FILE:lobsim_run> -DEXPORT=$<TARGET_FILE:lobsim_export_lobster>
+    -DCALIBRATE=$<TARGET_FILE:lobsim_calibrate>
+    -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/configs/calibrated.json
+    -DTRUTH=${CMAKE_CURRENT_SOURCE_DIR}/calibration/recovery_truth.json
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/calibration_recovery
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/calibration_recovery.cmake)
+# The committed truth must be what tools/make_recovery_truth.py writes.
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME recovery_truth_up_to_date
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_recovery_truth.py --check
+      --out ${CMAKE_CURRENT_SOURCE_DIR}/calibration/recovery_truth.json)
+endif()
 
 # lobsim_calibrate estimate on a hand-written fixture: exit codes 0, 1 and 3, and a file that loads.
 add_test(NAME calibrate_cli

@@ -1,0 +1,16 @@
+{
+  "seed": 20240101,
+  "duration_s": 7500,
+  "warmup_s": 300,
+  "max_price": 1000000,
+  "initial_price": 10000,
+  "tick_display": 0.01,
+  "fundamental": {"sigma_ticks_per_sqrt_s": 1.0, "dt_s": 0.1},
+  "noise_traders": {"count": 0, "lambda": 5.0, "p_limit": 0.85, "order_lifetime_mean_s": 30.0,
+                    "D": 10, "max_size": 10,
+                    "latency_us": {"entry": 0, "response": 0, "feed": 0, "jitter": 0}},
+  "background": {"model": "calibrated", "file": "../calibration/recovery_truth.json", "owner_count": 10000,
+                 "latency_us": {"entry": 0, "response": 0, "feed": 0, "jitter": 0}},
+  "markout_horizons_s": [1],
+  "sample_interval_s": 1.0
+}
