@@ -173,7 +173,7 @@ target_link_libraries(orderlog PUBLIC lob PRIVATE lobsim_options)
 
 # The binary market-data feed (upgrade 6, FEED.md): the ITCH 5.0 encoder and the book rebuilt from
 # the feed. lob only, never sim. The fuzz build compiles it too, so the feed fuzzer is instrumented.
-add_library(feed STATIC src/feed/encoder.cpp)
+add_library(feed STATIC src/feed/encoder.cpp src/feed/feed_book.cpp)
 target_link_libraries(feed PUBLIC lob PRIVATE lobsim_options)
 
 # Shared differential driver and the crash-file decoder (upgrade 1).
@@ -380,5 +380,8 @@ add_executable(micro_bench bench/micro_bench.cpp)
 target_link_libraries(micro_bench PRIVATE lob lobsim_options benchmark::benchmark_main)
 
 # Binary market-data feed (upgrade 6, FEED.md): the ITCH 5.0 tests run inside lob_tests.
-target_sources(lob_tests PRIVATE tests/unit/feed_itch_test.cpp tests/unit/feed_encoder_test.cpp)
+target_sources(lob_tests PRIVATE tests/unit/feed_itch_test.cpp tests/unit/feed_encoder_test.cpp
+  tests/unit/feed_decoder_test.cpp)
 target_link_libraries(lob_tests PRIVATE feed)
+# The seeded differential test also rebuilds the book from the feed and compares digests.
+target_link_libraries(fuzz_diff PRIVATE feed)
