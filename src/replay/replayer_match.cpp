@@ -98,6 +98,7 @@ void Replayer::check_burst(const Entry& first, Source& source) {
     burst.push_back(next);
   }
   burst_left_ = burst.size() - 1;
+  burst_size_ = burst.size();
   MatchingStats& stats = summary_.matching;
   ++stats.bursts;
   stats.burst_messages += burst.size();

@@ -258,6 +258,37 @@ target_link_libraries(calib_tests PRIVATE calibfile lobsim_options GTest::gtest_
 target_compile_definitions(calib_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 gtest_discover_tests(calib_tests)
 
+# The estimator (upgrade 3, C1): a replay observer that measures a LOBSTER day into a calibration
+# file, and lobsim_calibrate. The commit it was built from is regenerated at every build.
+find_package(Git QUIET)
+add_custom_target(calib_git_commit
+  COMMAND ${CMAKE_COMMAND} -DGIT=${GIT_EXECUTABLE} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/generated/calib_git_commit.hpp
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/git_commit.cmake
+  BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/generated/calib_git_commit.hpp
+  VERBATIM)
+add_library(calib STATIC src/calib/estimator.cpp src/calib/estimator_stats.cpp src/calib/estimator_report.cpp
+  src/calib/sha256.cpp src/calib/build_commit.cpp)
+add_dependencies(calib calib_git_commit)
+target_include_directories(calib PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+target_link_libraries(calib PUBLIC replay lob calibfile PRIVATE lobsim_options)
+
+add_executable(lobsim_calibrate apps/calibrate_main.cpp)
+target_link_libraries(lobsim_calibrate PRIVATE calib lobsim_options)
+
+add_executable(calib_estimator_tests tests/unit/calib_estimator_test.cpp tests/unit/replay_observer_test.cpp)
+target_link_libraries(calib_estimator_tests PRIVATE calib lobsim_options GTest::gtest_main)
+target_compile_definitions(calib_estimator_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+gtest_discover_tests(calib_estimator_tests)
+
+# lobsim_calibrate estimate on a hand-written fixture: exit codes 0, 1 and 3, and a file that loads.
+add_test(NAME calibrate_cli
+  COMMAND ${CMAKE_COMMAND}
+    -DCALIBRATE=$<TARGET_FILE:lobsim_calibrate>
+    -DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calib/km_example
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/calibrate_cli
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/calibrate_cli.cmake)
+
 # Closed loop (upgrade 2, R4): a 60 s simulator run exported to LOBSTER files and replayed. Unfiltered:
 # strict mode must be exact on every row at depth 10. Filtered to the top-10 window: resync mode
 # must make no correction at level 1. Everything is generated in the build directory.
