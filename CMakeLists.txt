@@ -358,3 +358,6 @@ add_test(NAME lobsim_bench_smoke COMMAND lobsim_bench --messages 20000 --ref-mes
 
 add_executable(micro_bench bench/micro_bench.cpp)
 target_link_libraries(micro_bench PRIVATE lob lobsim_options benchmark::benchmark_main)
+
+# Binary market-data feed (upgrade 6, FEED.md): the ITCH 5.0 tests run inside lob_tests.
+target_sources(lob_tests PRIVATE tests/unit/feed_itch_test.cpp)
