@@ -211,7 +211,9 @@ std::string render_markdown(const json& v, bool with_plots) {
        "Spread and depth rows are the first to show a mismatch of the starting state.\n"
     << "- Calibrated flow counters summed over seeds: " << k.at("limits_sent").get<unsigned long long>() << " limit orders, "
     << k.at("markets_sent").get<unsigned long long>() << " market orders, " << k.at("placement_redraws").get<unsigned long long>()
-    << " placement redraws (a draw that would cross), " << k.at("placement_clamped").get<unsigned long long>()
+    << " placement redraws (a draw that would cross), " << k.value("placement_bucket_fallback", 0ULL)
+    << " placements drawn from the nearest non-empty spread bucket (empty buckets of the calibration: "
+    << cal.at("empty_placement_buckets").dump() << "), " << k.at("placement_clamped").get<unsigned long long>()
     << " placements clamped after 100 redraws, " << k.at("fallback_one_sided").get<unsigned long long>() << " one-sided and "
     << k.at("fallback_empty").get<unsigned long long>() << " empty-book fallbacks, " << k.at("no_cancel_draws").get<unsigned long long>()
     << " lifetime draws without a cancel.\n\n";

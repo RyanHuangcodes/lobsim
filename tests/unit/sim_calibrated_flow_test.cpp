@@ -559,7 +559,21 @@ TEST(CalibratedConfig, Errors) {
 
 TEST(CalibratedConfig, EmptyPmfsTheAgentNeedsAreAClearError) {
   expect_config_error(run_json("flow_empty_limit_size.json"), "limit_size is empty");
-  expect_config_error(run_json("flow_empty_placement.json"), "placement[sell][2] is empty");
+  expect_config_error(run_json("flow_empty_placement_side.json"), "placement[sell]: all three spread buckets are empty");
+}
+
+// One empty bucket (flow_empty_placement.json: sell, spread 1) loads, and the agent draws from the nearest
+// non-empty bucket of that side (bucket "2" is empty: it draws from "1").
+TEST(CalibratedConfig, OneEmptyPlacementBucketFallsBackToTheNearestNonEmptyOne) {
+  const SimConfig c = parse_config(run_json("flow_empty_placement.json"), kFixtures);
+  ASSERT_TRUE(c.background.has_value());
+  const calib::Calibration& cal = *c.background->calibration;
+  ASSERT_TRUE(cal.placement[calib::kSell][1].empty());
+  Simulator s(c);
+  s.run();
+  const auto& agent = dynamic_cast<const CalibratedFlowAgent&>(s.agent(*s.background_index()));
+  EXPECT_GT(agent.counters().limits_sent, 0u);
+  EXPECT_GT(agent.counters().placement_bucket_fallback, 0u);
 }
 
 TEST(CalibratedConfig, AbsentSectionLeavesTheConfigUntouched) {

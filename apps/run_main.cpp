@@ -230,6 +230,8 @@ int main(int argc, char** argv) {
       std::printf("background placement %" PRIu64 " redraws, %" PRIu64 " clamped to the crossing bound, %" PRIu64
                   " price clamps; fallbacks: %" PRIu64 " one-sided book, %" PRIu64 " empty book\n",
                   k.placement_redraws, k.placement_clamped, k.price_clamped, k.fallback_one_sided, k.fallback_empty);
+      std::printf("background buckets   %" PRIu64 " placements drawn from the nearest non-empty spread bucket\n",
+                  k.placement_bucket_fallback);
       std::printf("background cancels   %" PRIu64 " scheduled, %" PRIu64 " no-cancel draws, %" PRIu64 " sent, %" PRIu64
                   " rejects ignored\n",
                   k.cancels_scheduled, k.no_cancel_draws, k.cancels_sent, k.ignored_rejects);

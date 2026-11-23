@@ -227,7 +227,7 @@ json survival_json(const Calibration& c) {
 
 json counters_json(const sim::CalibratedFlowCounters& k) {
   return json{{"limits_sent", k.limits_sent},         {"markets_sent", k.markets_sent},
-              {"placement_redraws", k.placement_redraws}, {"placement_clamped", k.placement_clamped},
+              {"placement_redraws", k.placement_redraws}, {"placement_bucket_fallback", k.placement_bucket_fallback}, {"placement_clamped", k.placement_clamped},
               {"fallback_one_sided", k.fallback_one_sided}, {"fallback_empty", k.fallback_empty},
               {"price_clamped", k.price_clamped},     {"cancels_scheduled", k.cancels_scheduled},
               {"no_cancel_draws", k.no_cancel_draws}, {"cancels_sent", k.cancels_sent},
@@ -415,6 +415,16 @@ ValidateResult run_validation(const ValidateOptions& o, const EstimateFn& estima
                     " (source: " + cal.source + ", ticker " + cal.ticker + "), not estimated from this data.");
   }
   result.calibration = cal;
+  // Placement buckets with no samples in the calibration: the simulator draws from the nearest non-empty bucket
+  // of the same side (D-385).
+  json empty_buckets = json::array();
+  for (int s = 0; s < 2; ++s)
+    for (int b = 0; b < kSpreadBuckets; ++b)
+      if (cal.placement[static_cast<std::size_t>(s)][static_cast<std::size_t>(b)].empty())
+        empty_buckets.push_back(std::string(s == kBuy ? "buy" : "sell") + ":" + spread_bucket_name(b));
+  if (!empty_buckets.empty())
+    notes.push_back("The calibration has no placement samples for " + empty_buckets.dump() +
+                    " (spread bucket and side); those draws use the nearest non-empty bucket of the same side.");
 
   // ---- tick, start price, labels
   std::int64_t tick = 0;
@@ -512,6 +522,7 @@ ValidateResult run_validation(const ValidateOptions& o, const EstimateFn& estima
     totals.markets_sent += k.markets_sent;
     totals.placement_redraws += k.placement_redraws;
     totals.placement_clamped += k.placement_clamped;
+    totals.placement_bucket_fallback += k.placement_bucket_fallback;
     totals.fallback_one_sided += k.fallback_one_sided;
     totals.fallback_empty += k.fallback_empty;
     totals.price_clamped += k.price_clamped;
@@ -619,6 +630,7 @@ ValidateResult run_validation(const ValidateOptions& o, const EstimateFn& estima
                       {"window_to_ns", cal.window_to_ns},
                       {"window_note", cal.window_note},
                       {"median_mid_ticks", cal.median_mid_ticks},
+                      {"empty_placement_buckets", empty_buckets},
                       {"tick_units", cal.tick_units},
                       {"lambda_limit_per_s", cal.rates.limit[kBuy].per_s + cal.rates.limit[kSell].per_s},
                       {"lambda_aggressive_per_s", cal.rates.aggressive[kBuy].per_s + cal.rates.aggressive[kSell].per_s}};

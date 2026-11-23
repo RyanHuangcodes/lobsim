@@ -52,6 +52,7 @@ struct CalibratedFlowCounters {
   std::uint64_t limits_sent{0};
   std::uint64_t markets_sent{0};
   std::uint64_t placement_redraws{0};   // extra draws because a placement would have crossed
+  std::uint64_t placement_bucket_fallback{0};  // the spread bucket had no placement PMF: the nearest non-empty one was used
   std::uint64_t placement_clamped{0};   // 100 redraws all crossed: the bound was used
   std::uint64_t fallback_one_sided{0};  // limit orders placed with only one side in the local book
   std::uint64_t fallback_empty{0};      // limit orders placed with an empty local book
@@ -125,6 +126,7 @@ class CalibratedFlowAgent : public Agent {
   double lambda_limit_{0.0}, lambda_market_{0.0};
   double p_limit_buy_{0.5}, p_market_buy_{0.5};
   std::array<std::array<CumulativeTable, calib::kSpreadBuckets>, 2> placement_;
+  std::array<std::array<int, calib::kSpreadBuckets>, 2> placement_source_{};  // bucket whose table is drawn from
   CumulativeTable limit_size_, aggressive_size_;
   std::uint64_t next_client_id_{1};
   std::uint64_t next_owner_{0};

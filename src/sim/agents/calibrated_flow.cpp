@@ -63,8 +63,16 @@ CalibratedFlowAgent::CalibratedFlowAgent(const CalibratedFlowParams& params, Xos
     for (int s = 0; s < 2; ++s) {
       if (c.rates.limit[s].per_s <= 0.0) continue;
       for (int b = 0; b < calib::kSpreadBuckets; ++b) {
-        if (c.placement[s][b].empty()) throw std::invalid_argument("CalibratedFlowAgent: an empty placement PMF is needed");
-        placement_[s][b] = CumulativeTable(c.placement[s][b]);
+        if (!c.placement[s][b].empty()) placement_[s][b] = CumulativeTable(c.placement[s][b]);
+      }
+      // A bucket with no samples draws from the nearest non-empty one of the same side (D-385).
+      static constexpr int kOrder[calib::kSpreadBuckets][calib::kSpreadBuckets] = {{0, 1, 2}, {1, 0, 2}, {2, 1, 0}};
+      for (int b = 0; b < calib::kSpreadBuckets; ++b) {
+        placement_source_[s][b] = -1;
+        for (int k = 0; k < calib::kSpreadBuckets && placement_source_[s][b] < 0; ++k)
+          if (!placement_[s][kOrder[b][k]].empty()) placement_source_[s][b] = kOrder[b][k];
+        if (placement_source_[s][b] < 0)
+          throw std::invalid_argument("CalibratedFlowAgent: all three placement PMFs of one side are empty");
       }
     }
   }
@@ -133,7 +141,9 @@ void CalibratedFlowAgent::send_limit(Context& ctx) {
     bound = 0;
   }
 
-  const CumulativeTable& table = placement_[side_idx][bucket];
+  const int source = placement_source_[side_idx][bucket];
+  if (source != bucket) ++counters_.placement_bucket_fallback;
+  const CumulativeTable& table = placement_[side_idx][source];
   std::int64_t delta = table.sample(rng);
   if (bound && delta < *bound) {
     int tries = 0;

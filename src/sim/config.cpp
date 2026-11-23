@@ -88,7 +88,8 @@ void check_latency(const LatencySpec& l, const std::string& where) {
 
 // What the agent needs from the calibration, as a clear error at load time. The same bucket
 // rules as the agent: every spread bucket is reachable (a one-sided or empty local book uses
-// bucket "1"), so every side that can send a limit order needs all three placement PMFs.
+// bucket "1"), so every side that can send a limit order needs at least one placement PMF; a bucket without one
+// falls back to the nearest non-empty bucket of the side (D-385).
 void check_calibration_usable(const calib::Calibration& c, const std::string& file) {
   const std::string w = "background.file (" + file + ")";
   const double lim_buy = c.rates.limit[calib::kBuy].per_s, lim_sell = c.rates.limit[calib::kSell].per_s;
@@ -99,10 +100,12 @@ void check_calibration_usable(const calib::Calibration& c, const std::string& fi
     if (c.limit_size.empty()) bad(w, "limit_size is empty but limit orders have a positive rate");
     for (int s = 0; s < 2; ++s) {
       if (c.rates.limit[s].per_s <= 0.0) continue;
-      for (int b = 0; b < calib::kSpreadBuckets; ++b)
-        if (c.placement[s][b].empty())
-          bad(w, std::string("placement[") + (s == calib::kBuy ? "buy" : "sell") + "][" + calib::spread_bucket_name(b) +
-                     "] is empty but that side has a positive limit rate");
+      // One empty bucket is fine (the agent draws from the nearest non-empty one); all three are not.
+      bool any = false;
+      for (int b = 0; b < calib::kSpreadBuckets; ++b) any = any || !c.placement[s][b].empty();
+      if (!any)
+        bad(w, std::string("placement[") + (s == calib::kBuy ? "buy" : "sell") +
+                   "]: all three spread buckets are empty but that side has a positive limit rate");
     }
   }
   if (agg_buy + agg_sell > 0.0 && c.aggressive_size.empty())

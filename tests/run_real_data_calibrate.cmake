@@ -69,6 +69,14 @@ foreach(t A B)
     message(FATAL_ERROR "lobsim_export_lobster failed (${rc}): ${err}")
   endif()
 endforeach()
+# Ticker B's files are symbolic links into another folder: the script must follow them.
+file(MAKE_DIRECTORY "${OUT}/store")
+file(GLOB b_files "${OUT}/data/SYNB_*")
+foreach(f ${b_files})
+  get_filename_component(n "${f}" NAME)
+  file(RENAME "${f}" "${OUT}/store/${n}")
+  file(CREATE_LINK "${OUT}/store/${n}" "${f}" SYMBOLIC)
+endforeach()
 file(WRITE "${OUT}/report.md" "# report\n\n<!-- REAL-DATA:BEGIN -->\nreal-data text\n<!-- REAL-DATA:END -->\n")
 execute_process(COMMAND bash "${SCRIPT}" --calibrate --seeds 2 --data-dir "${OUT}/data" --report "${OUT}/report.md"
                         --out "${OUT}/o2" --bin "${LOBSTER}" --calibrate-bin "${CALIBRATE}"

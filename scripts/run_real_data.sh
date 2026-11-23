@@ -68,7 +68,7 @@ if [ -d "$data_dir" ]; then
   while IFS= read -r m; do
     ob="${m/_message_/_orderbook_}"
     [ "$ob" != "$m" ] && [ -f "$ob" ] && pairs+=("$m")
-  done < <(find "$data_dir" -maxdepth 1 -type f -name '*_message_*.csv' | sort)
+  done < <(find -L "$data_dir" -maxdepth 1 -type f -name '*_message_*.csv' | sort)
 fi
 
 render() { RUN_REAL_DATA_ROOT="$root" RUN_REAL_DATA_DIR="$data_dir" python3 - "$report" "$@" <<'PY'
