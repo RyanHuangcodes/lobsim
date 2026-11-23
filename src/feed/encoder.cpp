@@ -37,14 +37,14 @@ Encoder::Resting& Encoder::slot(lob::OrderId id) {
 
 std::uint64_t Encoder::timestamp(std::int64_t sim_ns) const {
   if (sim_ns < 0 || static_cast<std::uint64_t>(sim_ns) >= kTimestampLimit - kOpenNs) {
-    throw EncodeError(requests_, "time " + std::to_string(sim_ns) + " ns + 9:30 does not fit in 48 bits");
+    throw EncodeError(EncodeError::Kind::Overflow, requests_, "time " + std::to_string(sim_ns) + " ns + 9:30 does not fit in 48 bits");
   }
   return kOpenNs + static_cast<std::uint64_t>(sim_ns);
 }
 
 std::uint32_t Encoder::shares(lob::Qty q) const {
   if (q <= 0 || q > std::numeric_limits<std::uint32_t>::max()) {
-    throw EncodeError(requests_, "quantity " + std::to_string(q) + " does not fit in 32-bit shares");
+    throw EncodeError(EncodeError::Kind::Overflow, requests_, "quantity " + std::to_string(q) + " does not fit in 32-bit shares");
   }
   return static_cast<std::uint32_t>(q);
 }
@@ -52,7 +52,7 @@ std::uint32_t Encoder::shares(lob::Qty q) const {
 std::uint32_t Encoder::price(lob::Price p) const {
   constexpr lob::Price kMaxTicks = std::numeric_limits<std::uint32_t>::max() / 100;
   if (p <= 0 || p > kMaxTicks) {
-    throw EncodeError(requests_, "price " + std::to_string(p) + " ticks does not fit in a 32-bit Price(4)");
+    throw EncodeError(EncodeError::Kind::Overflow, requests_, "price " + std::to_string(p) + " ticks does not fit in a 32-bit Price(4)");
   }
   return static_cast<std::uint32_t>(p * 100);
 }
@@ -72,9 +72,9 @@ void Encoder::emit_a(lob::OrderId id, lob::Side side, lob::Qty qty, lob::Price p
 }
 
 void Encoder::emit_e(lob::OrderId maker, lob::Qty qty, std::uint64_t match) {
-  if (!live(maker)) throw EncodeError(requests_, "trade " + std::to_string(match) + " on order " + std::to_string(maker) + ", which is not resting");
+  if (!live(maker)) throw EncodeError(EncodeError::Kind::Inconsistent, requests_, "trade " + std::to_string(match) + " on order " + std::to_string(maker) + ", which is not resting");
   Resting& r = mirror_[maker];
-  if (qty > r.remaining) throw EncodeError(requests_, "trade " + std::to_string(match) + " is larger than order " + std::to_string(maker));
+  if (qty > r.remaining) throw EncodeError(EncodeError::Kind::Inconsistent, requests_, "trade " + std::to_string(match) + " is larger than order " + std::to_string(maker));
   pos_ += write(room(), MsgE{Prefix{kLocate, 0, ts_}, maker, shares(qty), match});
   ++counts_.E;
   counts_.bytes += kPrefix + kLenE;
@@ -154,7 +154,7 @@ void Encoder::on_request(std::int64_t sim_ns, const lob::Request& req, std::span
 #endif
       }
     } else if (const auto* m = std::get_if<lob::Modified>(&ev)) {
-      if (!live(m->order_id)) throw EncodeError(requests_, "modify of order " + std::to_string(m->order_id) + ", which is not resting");
+      if (!live(m->order_id)) throw EncodeError(EncodeError::Kind::Inconsistent, requests_, "modify of order " + std::to_string(m->order_id) + ", which is not resting");
       Resting& r = mirror_[m->order_id];
       if (m->priority_kept) {
         emit_x(m->order_id, r.remaining - m->new_qty);
@@ -181,6 +181,9 @@ void Encoder::on_request(std::int64_t sim_ns, const lob::Request& req, std::span
 
 #ifndef LOBSIM_FEED_BUG_ADD_BEFORE_EXEC
   if (subject && !killed && want - taken > 0) emit_a(*subject, side, want - taken, px);
+#else
+  static_cast<void>(want);  // the injected bug published the A already
+  static_cast<void>(killed);
 #endif
 }
 

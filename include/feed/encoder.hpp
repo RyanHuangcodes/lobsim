@@ -23,11 +23,17 @@ namespace feed {
 // `request()` is the 1-based number of the request being encoded (0 for the start message).
 class EncodeError : public std::runtime_error {
  public:
-  EncodeError(std::uint64_t request, const std::string& what)
-      : std::runtime_error("request " + std::to_string(request) + ": " + what), request_(request) {}
+  enum class Kind : std::uint8_t {
+    Overflow,      // a time, price or quantity that its ITCH field cannot hold
+    Inconsistent,  // events that contradict the resting orders seen so far
+  };
+  EncodeError(Kind kind, std::uint64_t request, const std::string& what)
+      : std::runtime_error("request " + std::to_string(request) + ": " + what), kind_(kind), request_(request) {}
+  Kind kind() const noexcept { return kind_; }
   std::uint64_t request() const noexcept { return request_; }
 
  private:
+  Kind kind_;
   std::uint64_t request_;
 };
 

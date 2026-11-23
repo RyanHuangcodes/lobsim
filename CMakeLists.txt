@@ -175,6 +175,30 @@ target_link_libraries(orderlog PUBLIC lob PRIVATE lobsim_options)
 # the feed. lob only, never sim. The fuzz build compiles it too, so the feed fuzzer is instrumented.
 add_library(feed STATIC src/feed/encoder.cpp src/feed/feed_book.cpp)
 target_link_libraries(feed PUBLIC lob PRIVATE lobsim_options)
+if(NOT LOBSIM_FUZZ)
+  add_executable(lobsim_feed apps/feed_main.cpp)
+  target_link_libraries(lobsim_feed PRIVATE feed orderlog lobsim_options)
+endif()
+# Feed canary build (LOBSIM_FEED_BUG): lob, orderlog, feed and lobsim_feed only. The check of the
+# hand-written exporter fixture (a crossing modify, partial fills) must fail with exit code 2.
+if(LOBSIM_FEED_BUG)
+  enable_testing()
+  add_test(NAME feed_canary_${LOBSIM_FEED_BUG}_fixture
+    COMMAND ${CMAKE_COMMAND}
+      -DFEED=$<TARGET_FILE:lobsim_feed>
+      -DRUN_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/lobster_export
+      -DEXPECT=2
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/feed_check_exit.cmake)
+  # The default simulator never rests a remainder after trading as a taker, so a closed-loop run
+  # cannot show this bug (D-327); the seeded differential stream does, on its first such order.
+  add_executable(fuzz_diff tests/fuzz_diff.cpp)
+  target_include_directories(fuzz_diff PRIVATE tests)
+  target_link_libraries(fuzz_diff PRIVATE lob feed lobsim_options)
+  add_test(NAME feed_canary_${LOBSIM_FEED_BUG}_diff
+    COMMAND ${CMAKE_COMMAND} -DDIFF=$<TARGET_FILE:fuzz_diff>
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/feed_canary_diff.cmake)
+  return()
+endif()
 
 # Shared differential driver and the crash-file decoder (upgrade 1).
 add_subdirectory(fuzz)
@@ -385,3 +409,22 @@ target_sources(lob_tests PRIVATE tests/unit/feed_itch_test.cpp tests/unit/feed_e
 target_link_libraries(lob_tests PRIVATE feed)
 # The seeded differential test also rebuilds the book from the feed and compares digests.
 target_link_libraries(fuzz_diff PRIVATE feed)
+# Closed loop of the feed: a 60 s run and the 600 s run length of the LOBSTER closed loop (seed 7).
+foreach(_duration 60 600)
+  add_test(NAME feed_closed_loop_${_duration}s
+    COMMAND ${CMAKE_COMMAND}
+      -DRUN=$<TARGET_FILE:lobsim_run> -DFEED=$<TARGET_FILE:lobsim_feed>
+      -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/configs/default.json -DSEED=7 -DDURATION=${_duration}
+      -DOUT=${CMAKE_CURRENT_BINARY_DIR}/feed_closed_loop_${_duration}s
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/feed_closed_loop.cmake)
+endforeach()
+# The hand-written exporter fixture checks clean (the control of the feed canary), and a missing
+# run folder is bad input (exit code 1).
+add_test(NAME feed_check_fixture
+  COMMAND ${CMAKE_COMMAND} -DFEED=$<TARGET_FILE:lobsim_feed>
+    -DRUN_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/lobster_export -DEXPECT=0
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/feed_check_exit.cmake)
+add_test(NAME feed_check_missing_run
+  COMMAND ${CMAKE_COMMAND} -DFEED=$<TARGET_FILE:lobsim_feed>
+    -DRUN_DIR=${CMAKE_CURRENT_BINARY_DIR}/feed_no_such_run -DEXPECT=1
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/feed_check_exit.cmake)
