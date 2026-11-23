@@ -96,7 +96,7 @@ def verdict(v):
 
 
 def scorecard_table(v):
-    lines = ["| metric | data (test) [95% interval] | calibrated sim [95% CI of mean] | baseline sim [95% CI of mean] | verdict |",
+    lines = ["| metric | data (test) [95% interval] | calibrated sim [95% CI of mean] | baseline sim [95% CI of mean]; its verdict | calibrated verdict |",
              "|---|---|---|---|---|"]
     for r in v["scorecard"]:
         d, c, b = r["data"], r["calibrated"], r["baseline"]

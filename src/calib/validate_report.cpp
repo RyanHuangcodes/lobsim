@@ -110,7 +110,7 @@ std::string render_markdown(const json& v, bool with_plots) {
     << " close, " << counts.at("calibrated").at("miss").get<int>() << " miss, " << counts.at("calibrated").at("n/a").get<int>()
     << " undefined. Baseline: " << counts.at("baseline").at("match").get<int>() << " match, " << counts.at("baseline").at("close").get<int>()
     << " close, " << counts.at("baseline").at("miss").get<int>() << " miss, " << counts.at("baseline").at("n/a").get<int>() << " undefined.\n\n";
-  o << "| metric | data (test) [95% interval] | calibrated sim [95% CI of mean] | baseline sim [95% CI of mean] | verdict |\n|---|---|---|---|---|\n";
+  o << "| metric | data (test) [95% interval] | calibrated sim [95% CI of mean] | baseline sim [95% CI of mean]; its verdict | calibrated verdict |\n|---|---|---|---|---|\n";
   for (const json& r : v.at("scorecard")) {
     const json& d = r.at("data");
     const json& c = r.at("calibrated");
