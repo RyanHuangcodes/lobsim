@@ -736,6 +736,9 @@ EstimateResult estimate_files(const std::string& messages_path, const std::strin
     const fs::path canonical = fs::canonical(messages_path, ec);
     if (!ec) info.readme_synthetic = fs::exists(canonical.parent_path() / "README_SYNTHETIC.txt", ec);
   }
+  if (const auto name = replay::parse_lobster_filename(messages_path); name && name->ticker.starts_with("SYNTH")) {
+    info.readme_synthetic = true;  // a made-up ticker (scripts/make_fake_day.sh)
+  }
   std::ifstream messages(messages_path, std::ios::binary);
   if (!messages) throw replay::InputError("cannot read " + messages_path);
   std::ifstream orderbook(orderbook_path, std::ios::binary);

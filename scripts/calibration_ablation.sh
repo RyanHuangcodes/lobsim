@@ -62,7 +62,7 @@ python3 - "$out" "$seeds" <<'PY'
 import json, sys
 from pathlib import Path
 out, seeds = Path(sys.argv[1]), sys.argv[2]
-rows = ["spread_mean", "spread_one_tick_share", "fill_le0", "executed_share", "vol_1s", "vol_60s", "sign_acf_lag1"]
+rows = ["spread_mean", "spread_one_tick_share", "fill_le0", "fill_1_2", "executed_share", "vol_1s", "vol_60s", "sign_acf_lag1"]
 variants = ["full", "no_market_maker", "no_informed", "noise_only"]
 for day in ["SYNTHA", "SYNTHB"]:
     print(f"### {day} (SYNTHETIC data, NOT real market data; {seeds} seeds)\n")

@@ -81,6 +81,9 @@ struct CalibratedFlowCounters {
 //   own side present, other side absent: reference own best, bucket "3+", nothing to cross;
 //   own side absent, other side present: reference other best -/+ 1 tick, bucket "1", bound 0;
 //   empty book: reference the start price, bucket "1", bound 0.
+// A bucket with no samples for the side draws from the nearest non-empty one (D-385). When that one is narrower than
+// the actual spread, its Delta is measured from the opposite best -/+ its own spread (1 or 2 ticks), not from the own
+// best, so that a spread that has widened can close again (D-399).
 class CalibratedFlowAgent : public Agent {
  public:
   CalibratedFlowAgent(const CalibratedFlowParams& params, Xoshiro256StarStar lifetime_rng);

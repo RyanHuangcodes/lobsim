@@ -19,7 +19,7 @@ short version:
 | `lambda_{limit,market}_{buy,sell,total}` | type 1 messages and bursts per second of window |
 
 Non-scalar fields: `spread_pmf` (`calib::Pmf`, ticks, weights in ns), the time accounting (`no_state_ns`, `one_sided_ns`, `empty_ns`, `crossed_ns`),
-the counts of what was skipped (`vol[i].skipped`, `placement_unknown`, `off_grid_rows`, `duplicate_order_ids`).
+the counts of what was skipped (`vol[i].skipped`, `placement_unknown`, `off_grid_rows`, `duplicate_order_ids`, `reused_order_ids`).
 
 Autocorrelation: `rho_k = (mean over pairs of c_i c_{i+k}) / (mean of c_i^2)`, c = value minus the mean of the valid values, the pair mean over the
 pairs whose two members are valid. Undefined values are NaN in C++ and `null` in JSON.

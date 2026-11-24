@@ -428,7 +428,8 @@ ValidateResult run_validation(const ValidateOptions& o, const EstimateFn& estima
   }
   if (o.calibration_file.empty() && !estimate) throw std::invalid_argument("no estimator available and no --calibration file");
 
-  check_test_coverage(scan_coverage(o.messages, o.test), o.test);
+  const Coverage coverage = scan_coverage(o.messages, o.test);
+  check_test_coverage(coverage, o.test);
 
   const NameParts names = parse_name(o.messages);
   const std::string out_dir =
@@ -436,6 +437,14 @@ ValidateResult run_validation(const ValidateOptions& o, const EstimateFn& estima
   fs::create_directories(out_dir);
   const int levels = levels_of(o.orderbook);
   std::vector<std::string> notes;
+  // Within the slack check_test_coverage allows, but more than a second short: say so, because the missing part is
+  // scored against the last row before it.
+  if (*coverage.first_ns > o.test.from_ns + kNs)
+    notes.push_back("The data starts at " + seconds_text(*coverage.first_ns) + ", " + seconds_text(*coverage.first_ns - o.test.from_ns) +
+                    " after the test period starts; the missing part has no book.");
+  if (*coverage.last_ns < o.test.to_ns - kNs)
+    notes.push_back("The data ends at " + seconds_text(*coverage.last_ns) + ", " + seconds_text(o.test.to_ns - *coverage.last_ns) +
+                    " before the test period ends; the missing part is scored against the last row.");
 
   // ---- step 1: the calibration (training period only)
   ValidateResult result;
@@ -488,7 +497,8 @@ ValidateResult run_validation(const ValidateOptions& o, const EstimateFn& estima
                         "the file's data identity (message-file SHA-256, ticker, date) and estimation window were compared with the test period instead"}};
     notes.push_back("The calibration was read from " + fs::path(o.calibration_file).filename().string() + " (source: " + cal.source + ", ticker " +
                     cal.ticker + ", date " + cal.date + ", estimation window " + seconds_text(cal.window_from_ns) + " to " + seconds_text(cal.window_to_ns) +
-                    "). It was not estimated by this run; it does not come from this message file or from this ticker and date over a window overlapping the test period.");
+                    "). It was not estimated by this run. Checked against the data: same message file (SHA-256): " + std::string(same_sha ? "yes" : "no") + ", same ticker and date: " +
+                    std::string(same_id ? "yes" : "no") + ", estimation window overlaps the test period: " + std::string(overlaps ? "yes" : "no") + ".");
   }
   result.calibration = cal;
   // Placement buckets with no samples in the calibration: the simulator draws from the nearest non-empty bucket
@@ -516,7 +526,7 @@ ValidateResult run_validation(const ValidateOptions& o, const EstimateFn& estima
   if (tick < 1) throw std::runtime_error("the tick is " + std::to_string(tick));
   const std::int64_t start_price = o.start_price ? *o.start_price : cal.median_mid_ticks;
   if (start_price < 1) throw std::runtime_error("the start price is " + std::to_string(start_price) + " ticks: pass --start-price");
-  const bool data_synthetic = readme_synthetic_beside(o.messages);
+  const bool data_synthetic = readme_synthetic_beside(o.messages) || names.ticker.starts_with("SYNTH");
   std::string label;  // what every page says the numbers are
   if (data_synthetic || cal.source == "synthetic") label = "SYNTHETIC";
   else if (cal.source == "real") label = "REAL";

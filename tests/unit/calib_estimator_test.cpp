@@ -539,6 +539,21 @@ TEST(Output, SourceFollowsTheReadmeUnlessGiven) {
   EXPECT_THROW(calib::estimate_files(m, b, o), std::invalid_argument);
 }
 
+// A ticker that starts with SYNTH is made up (scripts/make_fake_day.sh): its files are synthetic wherever they are.
+TEST(Output, ASynthTickerIsSyntheticEvenWithoutAReadme) {
+  const fs::path dir = fs::path(::testing::TempDir()) / "calib_estimator_synth_ticker";
+  fs::create_directories(dir);
+  const auto renamed = [](const fs::path& f) {
+    const std::string n = f.filename().string();
+    return "SYNTHX" + n.substr(n.find('_'));
+  };
+  const fs::path m = dir / renamed(message_file("km_example")), b = dir / renamed(orderbook_file("km_example"));
+  fs::copy_file(message_file("km_example"), m, fs::copy_options::overwrite_existing);
+  fs::copy_file(orderbook_file("km_example"), b, fs::copy_options::overwrite_existing);
+  ASSERT_FALSE(fs::exists(dir / "README_SYNTHETIC.txt"));
+  EXPECT_EQ(calib::estimate_files(m.string(), b.string(), {}).calibration.source, "synthetic");
+}
+
 TEST(Sha256, KnownVectors) {
   EXPECT_EQ(calib::sha256_hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
   EXPECT_EQ(calib::sha256_hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");

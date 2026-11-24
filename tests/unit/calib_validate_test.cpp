@@ -364,6 +364,29 @@ TEST_F(Validate, SyntheticDataReachedThroughSymbolicLinksIsStillLabelledSyntheti
   fs::remove_all(links);
 }
 
+// A copied or hard-linked file has no README beside it and nothing to resolve; a ticker that starts with SYNTH is synthetic.
+TEST_F(Validate, ASynthTickerWithoutAReadmeIsLabelledSynthetic) {
+  const SmallDay& d = *day_;
+  const fs::path copies = d.dir / "copies";
+  fs::remove_all(copies);
+  fs::create_directories(copies);
+  const auto renamed = [](const std::string& f) {
+    const std::string n = fs::path(f).filename().string();
+    return "SYNTHZ" + n.substr(n.find('_'));
+  };
+  ValidateOptions o = small_options(d, (d.dir / "out").string());
+  o.messages = (copies / renamed(d.messages)).string();
+  o.orderbook = (copies / renamed(d.orderbook)).string();
+  fs::copy_file(d.messages, o.messages);
+  fs::copy_file(d.orderbook, o.orderbook);
+  StandIn est;
+  est.source = "real";  // the calibration alone would call this REAL
+  const ValidateResult r = run_validation(o, est.fn());
+  EXPECT_EQ(r.json.at("label"), "SYNTHETIC");
+  fs::remove_all(d.dir / "out");
+  fs::remove_all(copies);
+}
+
 TEST_F(Validate, TheRealEstimatorMarksSyntheticDataReachedThroughSymbolicLinks) {
   const SmallDay& d = *day_;
   const fs::path links = d.dir / "links2";
@@ -465,7 +488,11 @@ TEST_F(Validate, ATestPeriodThatTheDataEndsMoreThanAMinuteBeforeIsRefused) {
   EXPECT_TRUE(est.windows.empty());
   // A file that ends a few seconds early is fine.
   o.test = parse_period("34330-34470", "test");
-  EXPECT_NO_THROW(run_validation(o, est.fn()));
+  ValidateResult r;
+  ASSERT_NO_THROW(r = run_validation(o, est.fn()));
+  bool noted = false;  // but it is said: the rest is scored against the last row
+  for (const auto& n : r.json.at("notes")) noted = noted || n.get<std::string>().find("ends") != std::string::npos;
+  EXPECT_TRUE(noted);
   fs::remove_all(d.dir / "out");
 }
 
