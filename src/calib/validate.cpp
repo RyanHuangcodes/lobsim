@@ -4,6 +4,8 @@
 #include <atomic>
 #include <charconv>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -12,6 +14,7 @@
 #include <sstream>
 #include <thread>
 
+#include "calib/sha256.hpp"
 #include "replay/lobster.hpp"
 #include "sim/agents/calibrated_flow.hpp"
 #include "sim/config.hpp"
@@ -93,8 +96,61 @@ std::int64_t scan_tick(const std::string& messages_path, const Period& window, s
   return g;
 }
 
+// README_SYNTHETIC.txt beside the message file, or beside the file a symbolic link points to (a folder of links
+// has no README of its own). A hard link cannot be resolved; the real-data script refuses what it cannot label.
 bool readme_synthetic_beside(const std::string& messages_path) {
-  return fs::exists(fs::path(messages_path).parent_path() / "README_SYNTHETIC.txt");
+  std::error_code ec;
+  if (fs::exists(fs::path(messages_path).parent_path() / "README_SYNTHETIC.txt", ec)) return true;
+  const fs::path canonical = fs::canonical(messages_path, ec);
+  return !ec && fs::exists(canonical.parent_path() / "README_SYNTHETIC.txt", ec);
+}
+
+// What the message file covers, against the test period: the first and last message time and the number of
+// messages inside [test.from, test.to). Lines that do not parse are skipped (the replay reports them).
+struct Coverage {
+  std::optional<std::int64_t> first_ns, last_ns;
+  std::uint64_t in_test{0};
+};
+
+Coverage scan_coverage(const std::string& messages_path, const Period& test) {
+  std::ifstream f(messages_path, std::ios::binary);
+  if (!f) throw std::runtime_error("cannot read " + messages_path);
+  Coverage c;
+  std::string line;
+  while (std::getline(f, line)) {
+    const auto m = replay::parse_message_line(line);
+    if (!m.ok()) continue;
+    const std::int64_t t = m.value->time_ns;
+    if (!c.first_ns || t < *c.first_ns) c.first_ns = t;
+    if (!c.last_ns || t > *c.last_ns) c.last_ns = t;
+    if (t >= test.from_ns && t < test.to_ns) ++c.in_test;
+  }
+  return c;
+}
+
+std::string seconds_text(std::int64_t ns) {
+  char buf[48];
+  std::snprintf(buf, sizeof buf, "%lld.%03lld s", static_cast<long long>(ns / kNs), static_cast<long long>(std::llabs(ns % kNs) / 1'000'000));
+  return buf;
+}
+
+// The test period must be in the data: some message in it, the data not starting later than kCoverageSlackS
+// after it starts, and not ending earlier than kCoverageSlackS before it ends.
+void check_test_coverage(const Coverage& c, const Period& test) {
+  const std::string period = "[" + seconds_text(test.from_ns) + ", " + seconds_text(test.to_ns) + ")";
+  if (!c.first_ns || c.in_test == 0) {
+    throw TestPeriodError("the data has no message inside the test period " + period + (c.first_ns ? " (it covers " + seconds_text(*c.first_ns) + " to " + seconds_text(*c.last_ns) + ")" : std::string(" (no message at all)")) +
+                          ": there is nothing to compare the simulations with");
+  }
+  const std::int64_t slack = kCoverageSlackS * kNs;
+  if (*c.last_ns < test.to_ns - slack) {
+    throw TestPeriodError("the data ends at " + seconds_text(*c.last_ns) + ", more than " + std::to_string(kCoverageSlackS) +
+                          " s before the test period " + period + " ends: the rest would be scored against a frozen last row");
+  }
+  if (*c.first_ns > test.from_ns + slack) {
+    throw TestPeriodError("the data starts at " + seconds_text(*c.first_ns) + ", more than " + std::to_string(kCoverageSlackS) +
+                          " s after the test period " + period + " starts: the start would be scored against an empty book");
+  }
 }
 
 // ---- configurations ------------------------------------------------------------------------------
@@ -372,6 +428,8 @@ ValidateResult run_validation(const ValidateOptions& o, const EstimateFn& estima
   }
   if (o.calibration_file.empty() && !estimate) throw std::invalid_argument("no estimator available and no --calibration file");
 
+  check_test_coverage(scan_coverage(o.messages, o.test), o.test);
+
   const NameParts names = parse_name(o.messages);
   const std::string out_dir =
       !o.out_dir.empty() ? o.out_dir : (fs::path("build") / "validation" / (names.ticker + "_" + names.date)).string();
@@ -384,6 +442,7 @@ ValidateResult run_validation(const ValidateOptions& o, const EstimateFn& estima
   result.out_dir = out_dir;
   Calibration cal;
   json leakage;
+  json file_check = nullptr;
   const std::string stem = names.ticker + "_" + names.date + "_" + std::to_string(o.train.from_ns / kNs) + "-" +
                            std::to_string(o.train.to_ns / kNs);
   if (o.calibration_file.empty()) {
@@ -404,15 +463,32 @@ ValidateResult run_validation(const ValidateOptions& o, const EstimateFn& estima
                {"note", "the estimator read messages only inside the training period and none inside the test period"}};
   } else {
     cal = load(o.calibration_file);
+    // The file may have been estimated from this very data's test period: the same message file (SHA-256) or the
+    // same ticker and date, with an estimation window that overlaps the test period, is leakage.
+    const std::string data_sha = sha256_file(o.messages);
+    bool same_sha = false;
+    for (const InputFile& in : cal.inputs) same_sha = same_sha || in.sha256 == data_sha;
+    const bool same_id = cal.ticker == names.ticker && cal.date == names.date;
+    const bool overlaps = cal.window_to_ns > cal.window_from_ns && cal.window_from_ns < o.test.to_ns && cal.window_to_ns > o.test.from_ns;
+    if ((same_sha || same_id) && overlaps) {
+      throw LeakageError("leakage check: the calibration file " + fs::path(o.calibration_file).filename().string() + " was estimated from " +
+                         (same_sha ? "this message file (same SHA-256)" : "the same ticker and date (" + cal.ticker + " " + cal.date + ")") +
+                         " over [" + seconds_text(cal.window_from_ns) + ", " + seconds_text(cal.window_to_ns) + "), which overlaps the test period [" +
+                         seconds_text(o.test.from_ns) + ", " + seconds_text(o.test.to_ns) + ")");
+    }
+    file_check = {{"same_message_file_sha256", same_sha}, {"same_ticker_and_date", same_id}, {"window_overlaps_test_period", overlaps}};
     result.calibration_path = (fs::path(out_dir) / fs::path(o.calibration_file).filename()).string();
     if (fs::absolute(o.calibration_file) != fs::absolute(result.calibration_path)) {
       save(result.calibration_path, cal);
     }
     leakage = {{"checked", false},
                {"passed", nullptr},
-               {"note", "a calibration file was given (--calibration): no estimation was done on this data, so there is no estimator range to check"}};
-    notes.push_back("The calibration was read from " + fs::path(o.calibration_file).filename().string() +
-                    " (source: " + cal.source + ", ticker " + cal.ticker + "), not estimated from this data.");
+               {"calibration_file_check", file_check},
+               {"note", "a calibration file was given (--calibration): no estimation was done on this data, so there is no estimator range to check; "
+                        "the file's data identity (message-file SHA-256, ticker, date) and estimation window were compared with the test period instead"}};
+    notes.push_back("The calibration was read from " + fs::path(o.calibration_file).filename().string() + " (source: " + cal.source + ", ticker " +
+                    cal.ticker + ", date " + cal.date + ", estimation window " + seconds_text(cal.window_from_ns) + " to " + seconds_text(cal.window_to_ns) +
+                    "). It was not estimated by this run; it does not come from this message file or from this ticker and date over a window overlapping the test period.");
   }
   result.calibration = cal;
   // Placement buckets with no samples in the calibration: the simulator draws from the nearest non-empty bucket
@@ -605,7 +681,13 @@ ValidateResult run_validation(const ValidateOptions& o, const EstimateFn& estima
       }
     }
     survival["sim_note"] = "the estimator run on the first seed's exported window of each model (seed " + std::to_string(o.first_seed) + ")";
-    if (!o.keep_exports) fs::remove_all(export_root);
+    if (!o.keep_exports) {
+      // Only the folders written here; anything else the user keeps in <out>/exports stays.
+      std::error_code ec;
+      fs::remove_all(export_root / "calibrated", ec);
+      fs::remove_all(export_root / "baseline", ec);
+      if (fs::is_directory(export_root, ec) && fs::is_empty(export_root, ec)) fs::remove(export_root, ec);
+    }
   }
 
   // ---- validation.json
@@ -618,9 +700,14 @@ ValidateResult run_validation(const ValidateOptions& o, const EstimateFn& estima
   j["date"] = names.date;
   j["levels"] = levels;
   j["tick_units"] = tick;
-  j["train"] = {{"from_s", o.train.from_ns / kNs}, {"to_s", o.train.to_ns / kNs}};
+  j["train"] = {{"from_s", o.train.from_ns / kNs}, {"to_s", o.train.to_ns / kNs}, {"window_note", cal.window_note}};
   j["test"] = {{"from_s", o.test.from_ns / kNs}, {"to_s", o.test.to_ns / kNs}};
   j["leakage"] = leakage;
+  j["data_checks"] = {{"resubmitted_order_ids", data_fp.duplicate_order_ids},
+                      {"messages_in_test_period", data_fp.messages}};
+  j["bootstrap"] = {{"degenerate", data_boot.degenerate},
+                    {"block_seconds_used", data_boot.block_seconds_used},
+                    {"blocks_per_resample", data_boot.blocks_per_resample}};
   j["calibration"] = {{"file", fs::path(result.calibration_path).filename().string()},
                       {"estimated", o.calibration_file.empty()},
                       {"ticker", cal.ticker},

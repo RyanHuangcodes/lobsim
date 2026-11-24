@@ -64,6 +64,16 @@ class LeakageError : public std::runtime_error {
 void check_estimator_range(std::optional<std::int64_t> first_ns, std::optional<std::int64_t> last_ns,
                            const Period& train, const Period& test);
 
+// The test period is not covered by the data (no message in it, or the data starts or ends more than
+// kCoverageSlackS seconds away from it); thrown before any estimation or simulation. Exit code 1.
+class TestPeriodError : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
+// A data file may start up to this many seconds after the test period starts, or end this many seconds before
+// it ends (a file that stops a few seconds early is fine; the fingerprint pads the last row to the window end).
+constexpr std::int64_t kCoverageSlackS = 60;
+
 struct ValidateOptions {
   std::string messages;
   std::string orderbook;

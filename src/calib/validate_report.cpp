@@ -75,9 +75,16 @@ std::string render_markdown(const json& v, bool with_plots) {
   o << "- Data: `" << ticker << "`, " << date << ", L = " << v.at("levels").get<int>() << ", tick = "
     << v.at("tick_units").get<long long>() << " file price unit(s).\n"
     << "- Calibration: `" << cal.at("file").get<std::string>() << "` ("
-    << (cal.at("estimated").get<bool>() ? "estimated on the training period" : "read from a file, not estimated from this data") << "), ticker "
+    << (cal.at("estimated").get<bool>() ? "estimated on the training period" : "read from a file; see the note below for what was checked about it") << "), ticker "
     << cal.at("ticker").get<std::string>() << ", start price " << sim.at("start_price_ticks").get<long long>() << " ticks.\n"
-    << "- Training period: " << period_text(v.at("train")) << ". Test period: " << period_text(v.at("test")) << ".\n"
+    << "- Training period: " << period_text(v.at("train")) << ". Test period: " << period_text(v.at("test")) << ".\n";
+  if (const json& wn = v.at("train").value("window_note", json("")); wn.is_string() && !wn.get<std::string>().empty())
+    o << "- Estimation window: " << wn.get<std::string>() << ".\n";
+  if (v.contains("data_checks")) {
+    o << "- Data, test period: " << v.at("data_checks").at("messages_in_test_period").get<unsigned long long>() << " messages; resubmitted order ids: "
+      << v.at("data_checks").at("resubmitted_order_ids").get<unsigned long long>() << " (limit orders whose id was already submitted in the window).\n";
+  }
+  o
     << "- Simulations: " << sim.at("seeds").get<int>() << " seeds per model (seeds " << sim.at("first_seed").get<long long>() << " to "
     << sim.at("first_seed").get<long long>() + sim.at("seeds").get<int>() - 1 << "), each " << fmt(sim.at("warmup_s")) << " s of warm-up plus "
     << fmt(sim.at("test_s")) << " s measured (as long as the test period). Informed trader and market maker off in both.\n"
@@ -110,6 +117,11 @@ std::string render_markdown(const json& v, bool with_plots) {
     << " close, " << counts.at("calibrated").at("miss").get<int>() << " miss, " << counts.at("calibrated").at("n/a").get<int>()
     << " undefined. Baseline: " << counts.at("baseline").at("match").get<int>() << " match, " << counts.at("baseline").at("close").get<int>()
     << " close, " << counts.at("baseline").at("miss").get<int>() << " miss, " << counts.at("baseline").at("n/a").get<int>() << " undefined.\n\n";
+  if (v.contains("bootstrap") && v.at("bootstrap").at("degenerate").get<bool>()) {
+    o << "> **The test period is too short for the block bootstrap** (it is no longer than one 5-minute block; the block used was "
+      << v.at("bootstrap").at("block_seconds_used").get<int>() << " s): every resample is the data itself, so the data intervals below have zero width. "
+         "A match then needs an overlap with a single number, and the close verdict is empty; read the verdicts with that in mind and use a longer test period.\n\n";
+  }
   o << "| metric | data (test) [95% interval] | calibrated sim [95% CI of mean] | baseline sim [95% CI of mean]; its verdict | calibrated verdict |\n|---|---|---|---|---|\n";
   for (const json& r : v.at("scorecard")) {
     const json& d = r.at("data");

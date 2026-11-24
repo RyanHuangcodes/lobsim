@@ -270,11 +270,16 @@ add_custom_target(calib_git_commit
     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/git_commit.cmake
   BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/generated/calib_git_commit.hpp
   VERBATIM)
+# SHA-256 of the input files: the estimator writes it, validate compares it.
+add_library(calibsha STATIC src/calib/sha256.cpp)
+target_include_directories(calibsha PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(calibsha PUBLIC cxx_std_20)
+target_link_libraries(calibsha PRIVATE lobsim_options)
 add_library(calib STATIC src/calib/estimator.cpp src/calib/estimator_stats.cpp src/calib/estimator_report.cpp
-  src/calib/sha256.cpp src/calib/build_commit.cpp src/calib/recovery.cpp)
+  src/calib/build_commit.cpp src/calib/recovery.cpp)
 add_dependencies(calib calib_git_commit)
 target_include_directories(calib PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
-target_link_libraries(calib PUBLIC replay lob calibfile PRIVATE lobsim_options)
+target_link_libraries(calib PUBLIC replay lob calibfile calibsha PRIVATE lobsim_options)
 
 add_executable(lobsim_calibrate apps/calibrate_main.cpp apps/calibrate_compare.cpp apps/calibrate_validate.cpp)
 target_include_directories(lobsim_calibrate PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
@@ -458,7 +463,7 @@ gtest_discover_tests(fingerprint_tests)
 add_library(calibvalidate STATIC src/calib/validate.cpp src/calib/validate_report.cpp)
 target_include_directories(calibvalidate PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 find_package(Threads REQUIRED)
-target_link_libraries(calibvalidate PUBLIC fingerprint lobster_export sim calibfile Threads::Threads PRIVATE lobsim_options)
+target_link_libraries(calibvalidate PUBLIC fingerprint lobster_export sim calibfile calibsha Threads::Threads PRIVATE lobsim_options)
 add_executable(calib_validate_tests tests/unit/calib_validate_test.cpp)
 target_link_libraries(calib_validate_tests PRIVATE calibvalidate calib lobsim_options GTest::gtest_main)
 target_compile_definitions(calib_validate_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
@@ -478,3 +483,8 @@ add_test(NAME real_data_calibrate_script
     -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calib/noise_only_day.json
     -DOUT=${CMAKE_CURRENT_BINARY_DIR}/real_data_calibrate_script
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_real_data_calibrate.cmake)
+add_test(NAME real_data_calibrate_guards
+  COMMAND ${CMAKE_COMMAND}
+    -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_real_data.sh
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/real_data_calibrate_guards
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_real_data_guards.cmake)

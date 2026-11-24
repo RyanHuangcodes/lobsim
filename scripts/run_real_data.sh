@@ -3,7 +3,7 @@
 # a report file, between <!-- REAL-DATA:BEGIN --> and <!-- REAL-DATA:END -->.
 #
 #   scripts/run_real_data.sh [--data-dir DIR] [--report FILE] [--out DIR] [--bin PATH]
-#   scripts/run_real_data.sh --calibrate [--train A-B] [--test C-D] [--seeds N] [--calibrate-bin PATH] [other options]
+#   scripts/run_real_data.sh --calibrate [--train A-B] [--test C-D] [--seeds N] [--threads N] [--calibrate-bin PATH] [other options]
 #
 #   --data-dir  folder holding the LOBSTER files            (default data/lobster/)
 #   --report    file whose marked block is replaced         (default REAL_DATA.md; markers added if missing)
@@ -16,7 +16,10 @@
 # the REAL-DATA block is left alone). Windows: --train/--test (seconds after midnight), default 36000-45900 and
 # 45900-55800, or the data's span split in half when the data does not cover those. With two or more tickers it
 # also calibrates on the first and validates on each of the others (start price: the validated ticker's median
-# mid). Results of each run: <out>/calibration/<pair>/ (validation.md, validation.json, plots). Exit codes as below;
+# mid; only for tickers with different names, using the calibration file that run's own validation.json names).
+# --threads N is passed to every lobsim_calibrate validate (memory grows with threads; default: its own). A ticker
+# whose name starts with SYNTH and has no README_SYNTHETIC.txt beside its message file (or beside the file a symbolic
+# link points to) is refused, so synthetic data is never reported as real. Results of each run: <out>/calibration/<pair>/ (validation.md, validation.json, plots). Exit codes as below;
 # no data writes "Calibration pending data" and exits 3.
 #
 # Per pair it runs strict, report and resync mode (default compare and trust depths) and keeps
@@ -33,6 +36,7 @@ calibrate=0
 train=""
 test=""
 seeds=20
+threads=""
 cbin=""
 
 die() { echo "run_real_data.sh: $*" >&2; exit 1; }
@@ -44,12 +48,13 @@ while [ $# -gt 0 ]; do
     --train) train="$2" ;;
     --test) test="$2" ;;
     --seeds) seeds="$2" ;;
+    --threads) threads="$2" ;;
     --calibrate-bin) cbin="$2" ;;
     --data-dir) data_dir="$2" ;;
     --report) report="$2" ;;
     --out) out="$2" ;;
     --bin) bin="$2" ;;
-    *) die "unknown argument $1 (usage: run_real_data.sh [--calibrate [--train A-B] [--test C-D] [--seeds N] [--calibrate-bin PATH]] [--data-dir DIR] [--report FILE] [--out DIR] [--bin PATH])" ;;
+    *) die "unknown argument $1 (usage: run_real_data.sh [--calibrate [--train A-B] [--test C-D] [--seeds N] [--threads N] [--calibrate-bin PATH]] [--data-dir DIR] [--report FILE] [--out DIR] [--bin PATH])" ;;
   esac
   shift 2
 done
@@ -184,6 +189,26 @@ with open(report, "w") as f:
 PY
 }
 
+# The ticker of a LOBSTER stem <TICKER>_<YYYY-MM-DD>_...
+ticker_of() { echo "${1%%_[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_*}"; }
+
+# Is there a README_SYNTHETIC.txt beside this message file, or beside the file a symbolic link points to?
+# (A hard link has no other name to follow, which is why a SYNTH ticker without a README is refused.)
+synthetic_readme_beside() {
+  [ -f "$(dirname "$1")/README_SYNTHETIC.txt" ] && return 0
+  local real
+  real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1")" || return 1
+  [ -f "$(dirname "$real")/README_SYNTHETIC.txt" ]
+}
+
+# What one run's validation.json says: "<calibration file name><TAB><median mid ticks>". Fails if it is missing.
+run_calibration_of() {
+  python3 -c '
+import json, sys
+v = json.load(open(sys.argv[1]))
+print("%s\t%s" % (v["calibration"]["file"], v["calibration"]["median_mid_ticks"]))' "$1/validation.json"
+}
+
 # --calibrate: lobsim_calibrate validate on every pair, and the cross-ticker check. Returns the exit code.
 run_calibration() {
   local tools="$root/tools/calibration_report.py"
@@ -192,6 +217,14 @@ run_calibration() {
     echo "run_real_data.sh: no LOBSTER message/orderbook pairs in $data_dir; wrote 'Calibration pending data' to $report" >&2
     return 3
   fi
+  local pm ptk
+  for pm in "${pairs[@]}"; do
+    ptk="$(ticker_of "$(basename "$pm")")"
+    if [[ "$ptk" == SYNTH* ]] && ! synthetic_readme_beside "$pm"; then
+      echo "run_real_data.sh: $pm looks like synthetic data (ticker $ptk starts with SYNTH) but no README_SYNTHETIC.txt was found beside it or beside the file a link points to; refusing to write a real-data report. Put a README_SYNTHETIC.txt in the folder of the files (or use symbolic links, not hard links, to a folder that has one)." >&2
+      return 1
+    fi
+  done
   if [ -z "$cbin" ]; then
     for candidate in "${bin:+$(dirname "$bin")/lobsim_calibrate}" "$root/build/release/lobsim_calibrate" "$root/build/debug/lobsim_calibrate"; do
       if [ -n "$candidate" ] && [ -x "$candidate" ]; then cbin="$candidate"; break; fi
@@ -201,7 +234,9 @@ run_calibration() {
   local cdir="$out/calibration" manifest="$out/calibration/manifest.tsv" status=0
   mkdir -p "$cdir" || die "cannot create $cdir"
   : > "$manifest"
-  local stems=() dirs=() trains=() tests=() msgs=()
+  local stems=() dirs=() trains=() tests=() msgs=() rcs=()
+  local tflag=()
+  [ -z "$threads" ] || tflag=(--threads "$threads")
   local m ob stem win train_w test_w rest note dir rc
   for m in "${pairs[@]}"; do
     ob="${m/_message_/_orderbook_}"
@@ -211,34 +246,47 @@ run_calibration() {
     train_w="${win%% *}"; rest="${win#* }"; test_w="${rest%% *}"; note="${rest#* }"
     dir="$cdir/$stem"
     echo "== $stem: validate (train $train_w, test $test_w; $note)"
-    "$cbin" validate --messages "$m" --orderbook "$ob" --train "$train_w" --test "$test_w" --seeds "$seeds" --out "$dir"
+    "$cbin" validate --messages "$m" --orderbook "$ob" --train "$train_w" --test "$test_w" --seeds "$seeds" "${tflag[@]+"${tflag[@]}"}" --out "$dir"
     rc=$?
     [ "$rc" -eq 0 ] || { echo "run_real_data.sh: lobsim_calibrate validate exited with $rc on $stem" >&2; status=1; }
     printf 'same\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$stem" "$dir" "$train_w" "$test_w" "$note" "$rc" "" >> "$manifest"
-    stems+=("$stem"); dirs+=("$dir"); trains+=("$train_w"); tests+=("$test_w"); msgs+=("$m")
+    stems+=("$stem"); dirs+=("$dir"); trains+=("$train_w"); tests+=("$test_w"); msgs+=("$m"); rcs+=("$rc")
   done
-  # Cross-ticker: calibrate on the first ticker, validate on each of the others, starting at the other's median mid.
-  local i cal mid
+  # Cross-ticker: calibrate on the first pair, validate on each pair of another ticker NAME, starting at that
+  # ticker's median mid. Both calibrations come from the files that the runs' own validation.json name, and only
+  # from runs that exited 0; a missing file is an error, never a fallback to some other file in the folder.
+  local i cal mid src_tk tk info calname
   if [ "${#stems[@]}" -ge 2 ]; then
-    cal="$(find "${dirs[0]}" -maxdepth 1 -name '*.json' ! -name validation.json | sort | head -n 1)"
-    if [ -z "$cal" ]; then
-      echo "run_real_data.sh: no calibration file in ${dirs[0]}; cross-ticker check skipped" >&2
-    else
-      for ((i = 1; i < ${#stems[@]}; i++)); do
-        local bcal
-        bcal="$(find "${dirs[$i]}" -maxdepth 1 -name '*.json' ! -name validation.json | sort | head -n 1)"
-        [ -n "$bcal" ] || { echo "run_real_data.sh: no calibration file in ${dirs[$i]}; cross-ticker ${stems[0]} to ${stems[$i]} skipped" >&2; continue; }
-        mid="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["median_mid_ticks"])' "$bcal")" || { status=1; continue; }
-        dir="$cdir/cross_${stems[0]}_to_${stems[$i]}"
-        echo "== cross-ticker: calibrated on ${stems[0]}, validated on ${stems[$i]} (start price $mid ticks)"
-        "$cbin" validate --messages "${msgs[$i]}" --orderbook "${msgs[$i]/_message_/_orderbook_}" --train "${trains[$i]}" --test "${tests[$i]}" \
-          --seeds "$seeds" --calibration "$cal" --start-price "$mid" --out "$dir"
-        rc=$?
-        [ "$rc" -eq 0 ] || { echo "run_real_data.sh: cross-ticker validate exited with $rc" >&2; status=1; }
-        printf 'cross\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "calibrated on ${stems[0]}, validated on ${stems[$i]}" "$dir" "${trains[$i]}" "${tests[$i]}" \
-          "calibration of ${stems[0]} (estimated on its own training period); start price ${mid} ticks, the median mid of ${stems[$i]}" "$rc" "" >> "$manifest"
-      done
-    fi
+    src_tk="$(ticker_of "${stems[0]}")"
+    cal=""
+    for ((i = 1; i < ${#stems[@]}; i++)); do
+      tk="$(ticker_of "${stems[$i]}")"
+      [ "$tk" != "$src_tk" ] || continue  # the same ticker on another date or level is not a cross-ticker check
+      if [ -z "$cal" ]; then
+        if [ "${rcs[0]}" -ne 0 ]; then
+          echo "run_real_data.sh: the validation of ${stems[0]} failed (exit ${rcs[0]}); the cross-ticker check needs its calibration and is not run" >&2
+          status=1; break
+        fi
+        info="$(run_calibration_of "${dirs[0]}")" || { echo "run_real_data.sh: cannot read ${dirs[0]}/validation.json; the cross-ticker check is not run" >&2; status=1; break; }
+        calname="${info%%$'\t'*}"
+        cal="${dirs[0]}/$calname"
+        [ -f "$cal" ] || { echo "run_real_data.sh: the calibration file $cal named by ${dirs[0]}/validation.json does not exist; the cross-ticker check is not run" >&2; status=1; cal=""; break; }
+      fi
+      if [ "${rcs[$i]}" -ne 0 ]; then
+        echo "run_real_data.sh: the validation of ${stems[$i]} failed (exit ${rcs[$i]}), so its start price is unknown; cross-ticker ${stems[0]} to ${stems[$i]} is not run" >&2
+        status=1; continue
+      fi
+      info="$(run_calibration_of "${dirs[$i]}")" || { echo "run_real_data.sh: cannot read ${dirs[$i]}/validation.json; cross-ticker ${stems[0]} to ${stems[$i]} is not run" >&2; status=1; continue; }
+      mid="${info#*$'\t'}"
+      dir="$cdir/cross_${stems[0]}_to_${stems[$i]}"
+      echo "== cross-ticker: calibrated on ${stems[0]}, validated on ${stems[$i]} (start price $mid ticks)"
+      "$cbin" validate --messages "${msgs[$i]}" --orderbook "${msgs[$i]/_message_/_orderbook_}" --train "${trains[$i]}" --test "${tests[$i]}" \
+        --seeds "$seeds" "${tflag[@]+"${tflag[@]}"}" --calibration "$cal" --start-price "$mid" --out "$dir"
+      rc=$?
+      [ "$rc" -eq 0 ] || { echo "run_real_data.sh: cross-ticker validate exited with $rc" >&2; status=1; }
+      printf 'cross\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "calibrated on ${stems[0]}, validated on ${stems[$i]}" "$dir" "${trains[$i]}" "${tests[$i]}" \
+        "calibration of ${stems[0]} (estimated on its own training period); start price ${mid} ticks, the median mid of ${stems[$i]}" "$rc" "" >> "$manifest"
+    done
   fi
   python3 "$tools" report --report "$report" --manifest "$manifest" --data-dir "$data_dir" --seeds "$seeds" --root "$root" || die "could not write $report"
   echo "run_real_data.sh: wrote the calibration results of ${#stems[@]} pair(s) to $report"

@@ -149,6 +149,8 @@ SmallDay make_small_day(const std::string& name) {
 // Reports what it was asked for: the calibration is the hand-made fixture, relabelled; the observed range is
 // the requested window, or what `range` says when a test wants to misbehave.
 struct StandIn {
+  std::string source{"synthetic"};  // what the stand-in's calibration says it is made from
+  std::string window_note;          // what it says about its window
   std::function<std::pair<std::int64_t, std::int64_t>(std::int64_t, std::int64_t)> range = [](std::int64_t from, std::int64_t to) {
     return std::make_pair(from, to - 1);
   };
@@ -158,7 +160,8 @@ struct StandIn {
       windows.emplace_back(from, to);
       EstimatorOutput out;
       out.calibration = load(kSource + "/tests/fixtures/calib/flow_small.json");
-      out.calibration.source = "synthetic";
+      out.calibration.source = source;
+      out.calibration.window_note = window_note;
       out.calibration.ticker = "TST";
       out.calibration.median_mid_ticks = 10000;
       const auto r = range(from, to);
@@ -336,6 +339,191 @@ TEST_F(Validate, MissingInputIsDataMissing) {
   o.train = parse_period("34200-34330", "train");
   o.test = parse_period("34330-34450", "test");
   EXPECT_THROW(run_validation(o, est.fn()), DataMissingError);
+}
+
+// ---- review fixes ---------------------------------------------------------------------------------------------
+
+// S2: a folder of symbolic links to the files has no README_SYNTHETIC.txt beside it, but the files' own folder has.
+TEST_F(Validate, SyntheticDataReachedThroughSymbolicLinksIsStillLabelledSynthetic) {
+  const SmallDay& d = *day_;
+  const fs::path links = d.dir / "links";
+  fs::remove_all(links);
+  fs::create_directories(links);
+  fs::create_symlink(d.messages, links / fs::path(d.messages).filename());
+  fs::create_symlink(d.orderbook, links / fs::path(d.orderbook).filename());
+  ASSERT_FALSE(fs::exists(links / "README_SYNTHETIC.txt"));
+  StandIn est;
+  est.source = "real";  // the calibration alone would call this REAL
+  ValidateOptions o = small_options(d, (d.dir / "out").string());
+  o.messages = (links / fs::path(d.messages).filename()).string();
+  o.orderbook = (links / fs::path(d.orderbook).filename()).string();
+  const ValidateResult r = run_validation(o, est.fn());
+  EXPECT_EQ(r.json.at("label"), "SYNTHETIC");
+  EXPECT_EQ(r.json.at("data_source"), "synthetic");
+  fs::remove_all(d.dir / "out");
+  fs::remove_all(links);
+}
+
+TEST_F(Validate, TheRealEstimatorMarksSyntheticDataReachedThroughSymbolicLinks) {
+  const SmallDay& d = *day_;
+  const fs::path links = d.dir / "links2";
+  fs::remove_all(links);
+  fs::create_directories(links);
+  fs::create_symlink(d.messages, links / fs::path(d.messages).filename());
+  fs::create_symlink(d.orderbook, links / fs::path(d.orderbook).filename());
+  const EstimatorOutput e = real_estimator()((links / fs::path(d.messages).filename()).string(),
+                                             (links / fs::path(d.orderbook).filename()).string(), 34200 * kNs, 34330 * kNs, std::nullopt);
+  EXPECT_EQ(e.calibration.source, "synthetic");
+  fs::remove_all(links);
+}
+
+// S3: --calibration FILE estimated from this data's test period is leakage.
+TEST_F(Validate, ACalibrationFileEstimatedOnTheTestPeriodOfThisDataIsRefused) {
+  const SmallDay& d = *day_;
+  calib::EstimateOptions eo;
+  eo.from_ns = 34200 * kNs;
+  eo.to_ns = 34450 * kNs;  // the whole day: reaches into the test period 34330-34450
+  const calib::EstimateResult er = calib::estimate_files(d.messages, d.orderbook, eo);
+  const std::string file = (d.dir / "whole_day_calibration.json").string();
+  save(file, er.calibration);
+  ValidateOptions o = small_options(d, (d.dir / "out").string());
+  o.calibration_file = file;
+  o.start_price = 10000;
+  EXPECT_THROW(run_validation(o, EstimateFn{}), LeakageError);
+  EXPECT_FALSE(fs::exists(d.dir / "out" / "validation.json"));
+  // The same file used on a test period its window does not touch is allowed.
+  o.train = parse_period("34200-34210", "train");
+  o.test = parse_period("34430-34450", "test");
+  Calibration early = er.calibration;
+  early.window_to_ns = 34330 * kNs;
+  save(file, early);
+  EXPECT_NO_THROW(run_validation(o, EstimateFn{}));
+  fs::remove_all(d.dir / "out");
+}
+
+TEST_F(Validate, ACalibrationOfTheSameTickerAndDateOverlappingTheTestPeriodIsRefused) {
+  const SmallDay& d = *day_;
+  Calibration c = load(kSource + "/tests/fixtures/calib/flow_small.json");
+  c.ticker = "TST";
+  c.date = "2012-06-21";
+  c.window_from_ns = 34200 * kNs;
+  c.window_to_ns = 34400 * kNs;  // overlaps the test period; no input hashes at all
+  const std::string file = (d.dir / "same_ticker_date.json").string();
+  save(file, c);
+  ValidateOptions o = small_options(d, (d.dir / "out").string());
+  o.calibration_file = file;
+  o.start_price = 10000;
+  EXPECT_THROW(run_validation(o, EstimateFn{}), LeakageError);
+  // Another ticker with the very same window is the cross-ticker check and stays allowed.
+  c.ticker = "OTHER";
+  save(file, c);
+  EXPECT_NO_THROW(run_validation(o, EstimateFn{}));
+  fs::remove_all(d.dir / "out");
+}
+
+TEST_F(Validate, TheReportSaysOnlyWhatWasCheckedAboutAGivenCalibration) {
+  const SmallDay& d = *day_;
+  ValidateOptions o = small_options(d, (d.dir / "out").string());
+  o.calibration_file = kSource + "/tests/fixtures/calib/flow_small.json";
+  o.start_price = 10000;
+  const ValidateResult r = run_validation(o, EstimateFn{});
+  const std::string md = render_markdown(r.json, false);
+  EXPECT_EQ(md.find("not estimated from this data"), std::string::npos) << md.substr(0, 1500);
+  EXPECT_NE(md.find("flow_small.json"), std::string::npos);
+  EXPECT_NE(md.find("ticker TOY"), std::string::npos);
+  fs::remove_all(d.dir / "out");
+}
+
+// S4: a test period the data does not cover.
+std::string refusal_text(const ValidateOptions& o, const EstimateFn& fn) {
+  try {
+    run_validation(o, fn);
+  } catch (const std::runtime_error& e) {
+    return e.what();
+  }
+  return "";
+}
+
+TEST_F(Validate, ATestPeriodWithNoMessageIsRefusedBeforeAnyWork) {
+  const SmallDay& d = *day_;
+  StandIn est;
+  ValidateOptions o = small_options(d, (d.dir / "out").string());
+  o.test = parse_period("36000-36100", "test");
+  const std::string why = refusal_text(o, est.fn());
+  EXPECT_NE(why.find("test period"), std::string::npos) << why;
+  EXPECT_TRUE(est.windows.empty());
+  EXPECT_FALSE(fs::exists(d.dir / "out" / "validation.json"));
+}
+
+TEST_F(Validate, ATestPeriodThatTheDataEndsMoreThanAMinuteBeforeIsRefused) {
+  const SmallDay& d = *day_;
+  StandIn est;
+  ValidateOptions o = small_options(d, (d.dir / "out").string());
+  o.test = parse_period("34330-34600", "test");  // the data ends at about 34450
+  const std::string why = refusal_text(o, est.fn());
+  EXPECT_NE(why.find("ends"), std::string::npos) << why;
+  EXPECT_TRUE(est.windows.empty());
+  // A file that ends a few seconds early is fine.
+  o.test = parse_period("34330-34470", "test");
+  EXPECT_NO_THROW(run_validation(o, est.fn()));
+  fs::remove_all(d.dir / "out");
+}
+
+TEST_F(Validate, ATestPeriodThatTheDataStartsMoreThanAMinuteAfterIsRefused) {
+  const SmallDay& d = *day_;
+  StandIn est;
+  ValidateOptions o = small_options(d, (d.dir / "out").string());
+  o.train = parse_period("34000-34050", "train");
+  o.test = parse_period("34100-34300", "test");  // the data starts at about 34200
+  const std::string why = refusal_text(o, est.fn());
+  EXPECT_NE(why.find("starts"), std::string::npos) << why;
+  EXPECT_TRUE(est.windows.empty());
+}
+
+TEST_F(Validate, AClippedTrainingWindowNoteReachesTheReport) {
+  const SmallDay& d = *day_;
+  StandIn est;
+  est.window_note = "given window 34200-34330 s, clipped to the data (first message 34200.1 s)";
+  const ValidateResult r = run_validation(small_options(d, (d.dir / "out").string()), est.fn());
+  EXPECT_EQ(r.json.at("train").at("window_note"), est.window_note);
+  EXPECT_NE(render_markdown(r.json, false).find("clipped to the data"), std::string::npos);
+  fs::remove_all(d.dir / "out");
+}
+
+// S6: only the validation's own export folders are removed.
+TEST_F(Validate, TheExportFolderOfTheUserIsNotDeleted) {
+  const SmallDay& d = *day_;
+  const fs::path out = d.dir / "out_s6";
+  fs::remove_all(out);
+  fs::create_directories(out / "exports");
+  std::ofstream(out / "exports" / "mine.txt") << "keep me\n";
+  const ValidateResult r = run_validation(small_options(d, out.string()), real_estimator());
+  (void)r;
+  EXPECT_TRUE(fs::exists(out / "exports" / "mine.txt"));
+  EXPECT_FALSE(fs::exists(out / "exports" / "calibrated"));
+  EXPECT_FALSE(fs::exists(out / "exports" / "baseline"));
+  fs::remove_all(out);
+}
+
+// M8 and the resubmitted order ids.
+TEST_F(Validate, AWindowTooShortForTheBootstrapIsSaidNextToTheTable) {
+  const SmallDay& d = *day_;
+  StandIn est;
+  const ValidateResult r = run_validation(small_options(d, (d.dir / "out").string()), est.fn());
+  ASSERT_TRUE(r.json.at("bootstrap").at("degenerate").get<bool>());  // 120 s against 300 s blocks
+  const std::string md = render_markdown(r.json, false);
+  const std::size_t warn = md.find("too short for the block bootstrap");
+  const std::size_t table = md.find("| metric |");
+  ASSERT_NE(warn, std::string::npos);
+  ASSERT_NE(table, std::string::npos);
+  EXPECT_LT(warn, table);
+  EXPECT_GT(warn + 1200, table);  // next to the table, not in a footnote
+  json ok = r.json;
+  ok["bootstrap"]["degenerate"] = false;
+  EXPECT_EQ(render_markdown(ok, false).find("too short for the block bootstrap"), std::string::npos);
+  EXPECT_TRUE(r.json.at("data_checks").contains("resubmitted_order_ids"));
+  EXPECT_NE(md.find("resubmitted order ids"), std::string::npos);
+  fs::remove_all(d.dir / "out");
 }
 
 }  // namespace

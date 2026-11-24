@@ -731,6 +731,11 @@ EstimateResult estimate_files(const std::string& messages_path, const std::strin
   }
   std::error_code ec;
   info.readme_synthetic = fs::exists(fs::path(messages_path).parent_path() / "README_SYNTHETIC.txt", ec);
+  if (!info.readme_synthetic) {
+    // A folder of symbolic links has no README of its own: look beside the file the link points to.
+    const fs::path canonical = fs::canonical(messages_path, ec);
+    if (!ec) info.readme_synthetic = fs::exists(canonical.parent_path() / "README_SYNTHETIC.txt", ec);
+  }
   std::ifstream messages(messages_path, std::ios::binary);
   if (!messages) throw replay::InputError("cannot read " + messages_path);
   std::ifstream orderbook(orderbook_path, std::ios::binary);
