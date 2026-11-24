@@ -72,7 +72,7 @@ cmake --preset debug    && cmake --build --preset debug -j    && ctest --preset 
 cmake --preset sanitize && cmake --build --preset sanitize -j && ctest --preset sanitize   # ASan + UBSan
 ```
 
-The suite has more than 500 tests, with one extra pool test in the sanitize build that exists only under AddressSanitizer. All three builds compile with `-Wall -Wextra -Wpedantic -Werror` (`LOBSIM_WERROR`, on by default). The libFuzzer targets and the commands to build them (`-DLOBSIM_FUZZ=ON`, LLVM Clang only) are in [FUZZING.md](FUZZING.md). On an Apple M4 the sanitize suite takes about 100 seconds, most of it the differential fuzz test.
+The suite has more than 650 tests, with one extra pool test in the sanitize build that exists only under AddressSanitizer. All three builds compile with `-Wall -Wextra -Wpedantic -Werror` (`LOBSIM_WERROR`, on by default). The libFuzzer targets and the commands to build them (`-DLOBSIM_FUZZ=ON`, LLVM Clang only) are in [FUZZING.md](FUZZING.md). On an Apple M4 the sanitize suite takes about 100 seconds, most of it the differential fuzz test.
 
 Run the default one-hour simulation, check its replay, and draw its plots:
 
@@ -125,14 +125,15 @@ Export a run in LOBSTER format and replay it against its own book with the LOBST
 |---|---|
 | `include/lob`, `src/lob` | types and events, `ObjectPool`, `OrderBook`, `ReferenceBook`, `apply()` |
 | `include/sim`, `src/sim` | RNG, event queue, latency channels, exchange, fundamental, config, kernel, metrics, replay, order-log codec |
-| `include/sim/agents` | `NoiseTrader`, `InformedTrader`, `AvellanedaStoikovMM` |
-| `apps` | `lobsim_run`, `lobsim_replay`, `lobsim_bench`, `lobsim_export_lobster`, `lobsim_lobster` |
+| `include/sim/agents` | `NoiseTrader`, `InformedTrader`, `AvellanedaStoikovMM`, `CalibratedFlowAgent` |
+| `include/calib`, `src/calib` | the estimator, the market fingerprint, the calibration file, validation and recovery |
+| `apps` | `lobsim_run`, `lobsim_replay`, `lobsim_bench`, `lobsim_export_lobster`, `lobsim_lobster`, `lobsim_calibrate`, `lobsim_fingerprint` |
 | `bench` | Google Benchmark microbenchmarks |
 | `tests` | unit tests, differential fuzz test, determinism and replay tests, simulator stress tests |
 | `fuzz` | libFuzzer targets (engine differential, book builder, `orders.log` parser, LOBSTER parsers), seed corpora and saved regressions |
 | `viz` | `lobsim_viz_export` and the bundle format ([viz/BUNDLE.md](viz/BUNDLE.md)) |
 | `web` | the static replay dashboard (plain HTML, CSS and ES modules; vendored uPlot) |
-| `scripts` | `run_real_data.sh`, `make_fake_day.sh`, `build_site.sh` and the dashboard test fixture |
+| `scripts` | `run_real_data.sh`, `make_fake_day.sh`, `run_recovery.sh`, `calibration_ablation.sh`, `build_site.sh` and the dashboard test fixture |
 | `.github/workflows` | `ci.yml`, `fuzz-nightly.yml`, `pages.yml` |
 | `tools` | `plot.py`, `sweep.py`, `lobster_audit.py` (checks a replay of a synthetic LOBSTER-like export against the exporter's ground truth) |
 | `docs/sample_run` | the plots of the sample run below |
@@ -467,7 +468,7 @@ Parameter recovery (the estimator finds parameters we chose ourselves):
 > **Parameter recovery (synthetic).** Before estimating anything from data, the estimator is tested on a market whose parameters we chose: a hand-made truth is simulated for two hours, exported, estimated and compared. With nothing hidden (40 exported levels), all 14 checks pass: rates within 1.2%, placement TV at most 0.018, size TV below 0.005, lifetime medians within 2.1%, and 10 of 10 further seeds pass. With only 10 levels exported, 13 of those checks pass and the lifetime median of orders 10 or more ticks deep does not: almost every such order is already outside the visible book when it is submitted.
 > With a 10-level price filter like LOBSTER's, the limit-order rate reads 9% low and the far placement tail is lost. Details: [CALIBRATION.md](CALIBRATION.md) section 5.
 
-Dress rehearsal on two **synthetic** fake days (lobsim's own output, not market data; train half, test half): the calibrated flow scores 30 match / 18 close / 4 miss on SYNTHA and 33 / 14 / 5 on SYNTHB, against 29 / 13 / 10 and 16 / 10 / 26 for the old hand-picked noise traders (one row in each is undefined). Depth at every level, the lifetime curves and most order rates match or are close; the one-tick spread share and the fill rate of orders at the touch miss on both days, and the order-sign memory is missed on SYNTHB. An ablation (`scripts/calibration_ablation.sh`) ties the first two to the synthetic days' market maker and the last to their informed trader: calibrated on a day with the noise traders alone, the simulation matches the spread, the fills and the volatility. The baseline on SYNTHB runs at half that day's noise rate, so its large deficit there is not a like-for-like contest. Calibrating on SYNTHA and validating on SYNTHB (a market that trades twice as fast) gives 15 / 13 / 24. These are synthetic results and say nothing about a real market.
+Dress rehearsal on two **synthetic** fake days (lobsim's own output, not market data; train half, test half): the calibrated flow scores 31 match / 17 close / 4 miss on SYNTHA and 36 / 12 / 4 on SYNTHB, against 29 / 12 / 11 and 16 / 12 / 24 for the old hand-picked noise traders (one row in each is undefined). Depth at every level, the lifetime curves and most order rates match or are close; what misses: the one-tick spread share on both days, the mean spread, the fills 1 to 2 ticks away and the sign autocorrelation at lag 100 on SYNTHA, and the sign autocorrelations and the 1 s volatility on SYNTHB. An ablation (`scripts/calibration_ablation.sh`, one simulated day per variant) ties the one-tick share to the synthetic days' market maker and the sign memory to their informed trader; with the noise traders alone no row of the scorecard misses. The baseline on SYNTHB runs at half that day's noise rate, so its large deficit there is not a like-for-like contest. Calibrating on SYNTHA and validating on SYNTHB (a market that trades twice as fast) gives 16 / 14 / 22. These are synthetic results and say nothing about a real market.
 
 Real-data calibration: pending data (no LOBSTER files yet).
 

@@ -82,7 +82,8 @@ std::string render_markdown(const json& v, bool with_plots) {
     o << "- Estimation window: " << wn.get<std::string>() << ".\n";
   if (v.contains("data_checks")) {
     o << "- Data, test period: " << v.at("data_checks").at("messages_in_test_period").get<unsigned long long>() << " messages; resubmitted order ids: "
-      << v.at("data_checks").at("resubmitted_order_ids").get<unsigned long long>() << " (limit orders whose id was already submitted in the window).\n";
+      << v.at("data_checks").at("resubmitted_order_ids").get<unsigned long long>() << " (limit orders that reuse the id of an earlier order of the window that had ended; each is a new order, as in the estimator); "
+      << v.at("data_checks").at("ids_submitted_while_resting").get<unsigned long long>() << " submissions repeated the id of an order still resting (the first one keeps it).\n";
   }
   o
     << "- Simulations: " << sim.at("seeds").get<int>() << " seeds per model (seeds " << sim.at("first_seed").get<long long>() << " to "

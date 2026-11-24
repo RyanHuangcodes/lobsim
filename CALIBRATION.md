@@ -2,7 +2,7 @@
 
 lobsim's background traders used to have hand-picked settings. This page describes how they are now **measured** from a LOBSTER day, how the simulator reproduces what was measured, and how the result is **tested on data it was not fitted to**.
 
-> **Data status.** No real LOBSTER files have been run yet (the free samples are no longer available). Everything below that has a number was computed from the two synthetic fake days `SYNTHA` and `SYNTHB` and is labelled synthetic. No number here says anything about a real market. When real files are placed in `data/lobster/`, one command runs the same code on them with no code changes (see [Running it on real data](#12-running-it-on-real-data)).
+> **Data status.** No real LOBSTER files have been run yet (the free samples are no longer available). Every number in sections 6 to 9 was computed from the two synthetic fake days `SYNTHA` and `SYNTHB` and is labelled synthetic. No number here says anything about a real market. When real files are placed in `data/lobster/`, one command runs the same code on them with no code changes (see [Running it on real data](#12-running-it-on-real-data)).
 
 Contents: [1 Method](#1-method-in-two-steps-and-why) | [2 Definitions](#2-definitions-and-worked-examples) | [3 Estimator](#3-the-estimator) | [4 Calibrated flow](#4-the-calibrated-background-flow) | [5 Parameter recovery](#5-parameter-recovery) | [6 Fingerprint](#6-the-market-fingerprint) | [7 Validation](#7-out-of-sample-validation) | [8 Dress rehearsal](#8-dress-rehearsal-on-synthetic-data-not-real-market-data) | [9 Known gaps](#9-known-gaps) | [10 Out of scope](#10-out-of-scope-and-stretch-goals) | [11 C7](#11-c7-optional-was-not-done) | [12 Real data](#12-running-it-on-real-data)
 
@@ -77,7 +77,7 @@ It writes `calibration/<TICKER>_<DATE>_<from>-<to>.json` and a short human summa
 
 **Rates** (events per second, each split by side). $\lambda_L$ counts type-1 limit submissions by the order's side. $\lambda_M$ counts **bursts** of type-4 executions (the replayer's grouping of executions of one aggressive order), by the side of the aggressor, which is the opposite of the LOBSTER direction (D-307).
 
-**Placement.** The PMF $P(\Delta \mid \text{spread bucket}, \text{side})$ for the buckets $s = 1$, $s = 2$ and $s \ge 3$, over the integers from $-(s-1)$ to the largest observed $\Delta$ (D-306). Orders that cannot be placed are excluded and counted by reason (no previous row, unparsed or malformed or one-sided or crossed previous row, best quote off the tick grid, would cross); such an order is still a submission, so it counts in $\lambda_L$ and in the size PMF. The simulator uses the empirical PMF. For the report only, a power law $P(\Delta) \propto 1/(\Delta_0 + \Delta)^{1+\mu}$ for $\Delta \ge 0$ [2][3] is fitted by discrete maximum likelihood (D-314). On the fake days the fit runs into its bound (the noise trader's uniform distance is not power-law shaped), and the report says so.
+**Placement.** The PMF $P(\Delta \mid \text{spread bucket}, \text{side})$ for the buckets $s = 1$, $s = 2$ and $s \ge 3$, over the integers from $-(s-1)$ to the largest observed $\Delta$ (D-306). Orders that cannot be placed are excluded and counted by reason (no previous row, unparsed or malformed or one-sided or crossed previous row, best quote off the tick grid, would cross); such an order is still a submission, so it counts in $\lambda_L$ and in the size PMF. The simulator uses the empirical PMF. For the report only, a power law $P(\Delta) \propto 1/(\Delta_0 + \Delta)^{1+\mu}$ for $\Delta \ge 0$ [2][3] is fitted by discrete maximum likelihood (D-314). On three of the four sides of the fake days the fit runs into its bound (the noise trader's uniform distance is not power-law shaped), and the report says so.
 
 **Sizes.** Empirical PMFs, in shares, for limit orders and for the total size of each aggressive burst. Sizes above the 99.9th percentile (nearest rank) are pooled into the top bin, and the number pooled is reported (D-308).
 
@@ -104,7 +104,7 @@ Messages naming an order that is not tracked are counted in three classes (after
 
 ```json
 "background": {"model": "calibrated", "file": "calibration/SYNTHA_2012-06-21_34200-36000.json",
-               "owner_count": 50, "latency_us": 0, "start_price": 9984}
+               "owner_count": 50, "latency_us": {"entry": 0, "response": 0, "feed": 0, "jitter": 0}, "start_price": 9984}
 ```
 
 `file` is resolved against the config file's directory; `owner_count` defaults to 50, latency to 0, and `start_price` to the calibration's `median_mid_ticks`. Unknown keys are an error, and so is a calibration the agent cannot sample from (for example an empty size PMF with a positive rate), with the field named. **Defaults are off:** without the section nothing changes, `to_json(cfg)` has no `background` key, and every existing config, hash and output is identical. The informed trader and market maker are off in the validation runs because they have no data to be calibrated from; users can switch them back on.
@@ -143,7 +143,7 @@ The estimator is checked before anything is estimated from data: choose the para
 
 Weights are integers at a scale of 10^9, rounded half up. The survival grid is 10 ms wide around the median and coarse in the far tail; the median on the grid is 6.730 s against the exact 20·ln(1.4) = 6.7294 s (+0.008%).
 
-Two of these choices were made after looking at the simulated market, because the first attempt could not test what it was meant to test:
+Three choices were made after looking at the simulated market. Two of them, because the first attempt could not test what it was meant to test, are the aggressive sizes and the owner ids; the third is the number of exported levels, L = 40, chosen after one check failed at L = 10 (see "Why L = 40" below and D-364, D-394):
 
 - **Aggressive sizes.** With aggressive orders sized like limit orders, the price never moved: 20 minutes at a 1-tick spread, zero samples outside the s = 1 bucket. Six size distributions were tried (short runs), looking at the spread and the number of samples per spread bucket; the one above is the first that fills all three buckets without the spread running away (median 1 tick, 90th percentile 4). The choice decides what is tested, not whether it passes.
 - **10,000 owner ids** in `configs/calibrated.json` (the default is 50). One agent produces the whole flow, and a market order that meets a resting order of its own id is cut short by self-trade prevention. Measured directly, with the same seed and nothing else changed:
@@ -347,7 +347,7 @@ The fake days were generated by the old hand-picked noise traders **plus** an in
 
 ### Scorecard: SYNTHA (SYNTHETIC data, NOT real market data)
 
-Verdicts, calibrated simulation: Calibrated: 30 match, 18 close, 4 miss, 1 undefined. Baseline: 29 match, 13 close, 10 miss, 1 undefined.
+Verdicts, calibrated simulation: Calibrated: 31 match, 17 close, 4 miss, 1 undefined. Baseline: 29 match, 12 close, 11 miss, 1 undefined.
 
 | metric | data (test) [95% interval] | calibrated sim [95% CI of mean] | baseline sim [95% CI of mean]; its verdict | calibrated verdict |
 |---|---|---|---|---|
@@ -392,12 +392,12 @@ Verdicts, calibrated simulation: Calibrated: 30 match, 18 close, 4 miss, 1 undef
 | `sign_acf_lag1` | 0.04395 [0.02664, 0.06279] | -0.0003188 [-0.003347, 0.00271] | -0.002515 [-0.006451, 0.001422]; close | close |
 | `sign_acf_lag10` | 0.03483 [0.01645, 0.04239] | 0.0008624 [-0.002351, 0.004075] | -0.002394 [-0.005772, 0.0009836]; close | close |
 | `sign_acf_lag100` | 0.05712 [0.04184, 0.08096] | -0.002384 [-0.005369, 0.0006005] | 0.00245 [-0.001723, 0.006623]; close | miss (sim/data = -0.04174) |
-| `fill_le0` | 0.8855 [0.8711, 0.8965] | 0.6352 [0.6338, 0.6366] | 0.8599 [0.8574, 0.8624]; close | miss (sim/data = 0.7173) |
-| `fill_1_2` | 0.3107 [0.2892, 0.3355] | 0.2786 [0.2761, 0.2812] | 0.232 [0.2287, 0.2354]; miss (sim/data = 0.7468) | close |
+| `fill_le0` | 0.6882 [0.6608, 0.7244] | 0.6352 [0.6338, 0.6366] | 0.8599 [0.8574, 0.8624]; miss (sim/data = 1.25) | close |
+| `fill_1_2` | 0.2536 [0.2488, 0.2619] | 0.2786 [0.2761, 0.2812] | 0.232 [0.2287, 0.2354]; miss (sim/data = 0.915) | miss (sim/data = 1.099) |
 | `fill_3_9` | 0.01372 [0.007527, 0.02011] | 0.00635 [0.005958, 0.006741] | 0.001511 [0.001285, 0.001737]; close | close |
 | `fill_ge10` | n/a [n/a] | 0 [0, 0] | n/a [n/a]; n/a | n/a |
-| `fill_all` | 0.1831 [0.177, 0.1889] | 0.1695 [0.1688, 0.1702] | 0.1509 [0.1502, 0.1516]; miss (sim/data = 0.8241) | close |
-| `executed_share` | 0.1809 [0.175, 0.187] | 0.1668 [0.1661, 0.1674] | 0.1495 [0.1488, 0.1501]; miss (sim/data = 0.8264) | close |
+| `fill_all` | 0.1742 [0.1708, 0.1779] | 0.1695 [0.1688, 0.1702] | 0.1509 [0.1502, 0.1516]; miss (sim/data = 0.8661) | close |
+| `executed_share` | 0.1702 [0.1668, 0.1742] | 0.1668 [0.1661, 0.1674] | 0.1495 [0.1488, 0.1501]; miss (sim/data = 0.8783) | match |
 | `lambda_limit_buy` | 23.57 [23.17, 23.98] | 24 [23.96, 24.04] | 21.23 [21.18, 21.28]; miss (sim/data = 0.9008) | match |
 | `lambda_limit_sell` | 23.47 [22.99, 23.96] | 23.86 [23.81, 23.91] | 21.25 [21.2, 21.3]; miss (sim/data = 0.9056) | match |
 | `lambda_limit_total` | 47.03 [46.27, 47.88] | 47.86 [47.81, 47.92] | 42.48 [42.42, 42.54]; miss (sim/data = 0.9032) | match |
@@ -407,7 +407,7 @@ Verdicts, calibrated simulation: Calibrated: 30 match, 18 close, 4 miss, 1 undef
 
 ### Scorecard: SYNTHB (SYNTHETIC data, NOT real market data)
 
-Verdicts, calibrated simulation: Calibrated: 33 match, 14 close, 5 miss, 1 undefined. Baseline: 16 match, 10 close, 26 miss, 1 undefined.
+Verdicts, calibrated simulation: Calibrated: 36 match, 12 close, 4 miss, 1 undefined. Baseline: 16 match, 12 close, 24 miss, 1 undefined.
 
 | metric | data (test) [95% interval] | calibrated sim [95% CI of mean] | baseline sim [95% CI of mean]; its verdict | calibrated verdict |
 |---|---|---|---|---|
@@ -452,12 +452,12 @@ Verdicts, calibrated simulation: Calibrated: 33 match, 14 close, 5 miss, 1 undef
 | `sign_acf_lag1` | 0.07836 [0.0611, 0.0908] | -0.0006877 [-0.003252, 0.001877] | -0.002515 [-0.006451, 0.001422]; miss (sim/data = -0.03209) | miss (sim/data = -0.008776) |
 | `sign_acf_lag10` | 0.07938 [0.0488, 0.09942] | -0.001791 [-0.004074, 0.0004915] | -0.002394 [-0.005772, 0.0009836]; close | close |
 | `sign_acf_lag100` | 0.08269 [0.06219, 0.09778] | -0.0007549 [-0.003443, 0.001933] | 0.00245 [-0.001723, 0.006623]; miss (sim/data = 0.02963) | miss (sim/data = -0.009129) |
-| `fill_le0` | 0.8974 [0.8867, 0.9034] | 0.6737 [0.6722, 0.6753] | 0.8599 [0.8574, 0.8624]; miss (sim/data = 0.9582) | miss (sim/data = 0.7507) |
-| `fill_1_2` | 0.3391 [0.3275, 0.3558] | 0.3201 [0.3185, 0.3216] | 0.232 [0.2287, 0.2354]; miss (sim/data = 0.6843) | close |
+| `fill_le0` | 0.6932 [0.6676, 0.7233] | 0.6737 [0.6722, 0.6753] | 0.8599 [0.8574, 0.8624]; miss (sim/data = 1.241) | match |
+| `fill_1_2` | 0.284 [0.2643, 0.3081] | 0.3201 [0.3185, 0.3216] | 0.232 [0.2287, 0.2354]; close | close |
 | `fill_3_9` | 0.03646 [0.02434, 0.05136] | 0.006325 [0.006072, 0.006578] | 0.001511 [0.001285, 0.001737]; close | close |
 | `fill_ge10` | n/a [n/a] | 0 [0, 0] | n/a [n/a]; n/a | n/a |
-| `fill_all` | 0.207 [0.1926, 0.221] | 0.1901 [0.1895, 0.1907] | 0.1509 [0.1502, 0.1516]; miss (sim/data = 0.729) | close |
-| `executed_share` | 0.2054 [0.1915, 0.2193] | 0.1885 [0.1879, 0.1891] | 0.1495 [0.1488, 0.1501]; miss (sim/data = 0.7276) | close |
+| `fill_all` | 0.1964 [0.1817, 0.2107] | 0.1901 [0.1895, 0.1907] | 0.1509 [0.1502, 0.1516]; miss (sim/data = 0.7685) | match |
+| `executed_share` | 0.1935 [0.1785, 0.2079] | 0.1885 [0.1879, 0.1891] | 0.1495 [0.1488, 0.1501]; close | match |
 | `lambda_limit_buy` | 47.06 [46.01, 47.75] | 47.77 [47.71, 47.83] | 21.23 [21.18, 21.28]; miss (sim/data = 0.4511) | match |
 | `lambda_limit_sell` | 46.85 [46.06, 47.39] | 47.63 [47.54, 47.73] | 21.25 [21.2, 21.3]; miss (sim/data = 0.4536) | close |
 | `lambda_limit_total` | 93.91 [92.13, 95.03] | 95.4 [95.3, 95.51] | 42.48 [42.42, 42.54]; miss (sim/data = 0.4524) | close |
@@ -467,7 +467,7 @@ Verdicts, calibrated simulation: Calibrated: 33 match, 14 close, 5 miss, 1 undef
 
 ### Cross-ticker scorecard: calibrated on SYNTHA, validated on SYNTHB (SYNTHETIC data, NOT real market data)
 
-Verdicts, calibrated simulation: Calibrated: 15 match, 13 close, 24 miss, 1 undefined. Baseline: 16 match, 10 close, 26 miss, 1 undefined.
+Verdicts, calibrated simulation: Calibrated: 16 match, 14 close, 22 miss, 1 undefined. Baseline: 16 match, 12 close, 24 miss, 1 undefined.
 
 | metric | data (test) [95% interval] | calibrated sim [95% CI of mean] | baseline sim [95% CI of mean]; its verdict | calibrated verdict |
 |---|---|---|---|---|
@@ -512,12 +512,12 @@ Verdicts, calibrated simulation: Calibrated: 15 match, 13 close, 24 miss, 1 unde
 | `sign_acf_lag1` | 0.07836 [0.0611, 0.0908] | -0.0003188 [-0.003347, 0.00271] | -0.002515 [-0.006451, 0.001422]; miss (sim/data = -0.03209) | miss (sim/data = -0.004069) |
 | `sign_acf_lag10` | 0.07938 [0.0488, 0.09942] | 0.0008624 [-0.002351, 0.004075] | -0.002394 [-0.005772, 0.0009836]; close | close |
 | `sign_acf_lag100` | 0.08269 [0.06219, 0.09778] | -0.002384 [-0.005369, 0.0006005] | 0.00245 [-0.001723, 0.006623]; miss (sim/data = 0.02963) | miss (sim/data = -0.02883) |
-| `fill_le0` | 0.8974 [0.8867, 0.9034] | 0.6352 [0.6338, 0.6366] | 0.8599 [0.8574, 0.8624]; miss (sim/data = 0.9582) | miss (sim/data = 0.7078) |
-| `fill_1_2` | 0.3391 [0.3275, 0.3558] | 0.2786 [0.2761, 0.2812] | 0.232 [0.2287, 0.2354]; miss (sim/data = 0.6843) | miss (sim/data = 0.8217) |
+| `fill_le0` | 0.6932 [0.6676, 0.7233] | 0.6352 [0.6338, 0.6366] | 0.8599 [0.8574, 0.8624]; miss (sim/data = 1.241) | close |
+| `fill_1_2` | 0.284 [0.2643, 0.3081] | 0.2786 [0.2761, 0.2812] | 0.232 [0.2287, 0.2354]; close | match |
 | `fill_3_9` | 0.03646 [0.02434, 0.05136] | 0.00635 [0.005958, 0.006741] | 0.001511 [0.001285, 0.001737]; close | close |
 | `fill_ge10` | n/a [n/a] | 0 [0, 0] | n/a [n/a]; n/a | n/a |
-| `fill_all` | 0.207 [0.1926, 0.221] | 0.1695 [0.1688, 0.1702] | 0.1509 [0.1502, 0.1516]; miss (sim/data = 0.729) | close |
-| `executed_share` | 0.2054 [0.1915, 0.2193] | 0.1668 [0.1661, 0.1674] | 0.1495 [0.1488, 0.1501]; miss (sim/data = 0.7276) | close |
+| `fill_all` | 0.1964 [0.1817, 0.2107] | 0.1695 [0.1688, 0.1702] | 0.1509 [0.1502, 0.1516]; miss (sim/data = 0.7685) | close |
+| `executed_share` | 0.1935 [0.1785, 0.2079] | 0.1668 [0.1661, 0.1674] | 0.1495 [0.1488, 0.1501]; close | close |
 | `lambda_limit_buy` | 47.06 [46.01, 47.75] | 24 [23.96, 24.04] | 21.23 [21.18, 21.28]; miss (sim/data = 0.4511) | miss (sim/data = 0.51) |
 | `lambda_limit_sell` | 46.85 [46.06, 47.39] | 23.86 [23.81, 23.91] | 21.25 [21.2, 21.3]; miss (sim/data = 0.4536) | miss (sim/data = 0.5093) |
 | `lambda_limit_total` | 93.91 [92.13, 95.03] | 47.86 [47.81, 47.92] | 42.48 [42.42, 42.54]; miss (sim/data = 0.4524) | miss (sim/data = 0.5097) |
@@ -543,17 +543,17 @@ The cross-ticker run uses the calibration estimated on SYNTHA's training half an
 
 ### What matches, what is close, what misses
 
-Counts (calibrated flow; baseline in brackets): SYNTHA 30 match, 18 close, 4 miss, 1 undefined (29, 13, 10); SYNTHB 33 match, 14 close, 5 miss, 1 undefined (16, 10, 26); cross-ticker 15 match, 13 close, 24 miss, 1 undefined (16, 10, 26).
+Counts (calibrated flow; baseline in brackets): SYNTHA 31 match, 17 close, 4 miss, 1 undefined (29, 12, 11); SYNTHB 36 match, 12 close, 4 miss, 1 undefined (16, 12, 24); cross-ticker 16 match, 14 close, 22 miss, 1 undefined (16, 12, 24).
 
 The undefined row in every table is `fill_ge10`: no limit order in the data was placed 10 or more ticks from the touch inside the window, so the data has no value for it.
 
-**SYNTHA, matches (30).** Most depth levels on both sides (the rest are close; the normalised depth profile is within the halves yardstick, as for the baseline), `vol_60s`, kurtosis, eight of the ten autocorrelations of |r| (lags 1 and 5 are close), and all six order-rate rows. The lifetime curves are reproduced: median lifetime by distance bucket, training data / calibrated / baseline, in seconds: <=0 8.21 / 7.69 / 22.08; 1-2 13.54 / 13.63 / 21.14; 3-9 20.86 / 20.77 / 20.95 (the baseline's exponential lifetimes give about 21 s everywhere).
+**SYNTHA, matches (31).** Most depth levels on both sides (the rest are close; the normalised depth profile is within the halves yardstick, as for the baseline), `vol_60s`, kurtosis, eight of the ten autocorrelations of |r| (lags 1 and 5 are close), `executed_share` and all six order-rate rows. The lifetime curves are reproduced: median lifetime by distance bucket, training data / calibrated / baseline, in seconds: <=0 8.21 / 7.69 / 22.08; 1-2 13.54 / 13.63 / 21.14; 3-9 20.86 / 20.77 / 20.95 (the baseline's exponential lifetimes give about 21 s everywhere).
 
-**SYNTHA, close (18).** `vol_1s`, `vol_10s`, the lag-1 bounce, the sign autocorrelations at lags 1 and 10, `executed_share`, the remaining fill probabilities and the depth levels not listed above: the gaps are within twice the data interval's half-width. The trade-sign autocorrelation is small in the data (0.04395 at lag 1, from the informed trader: it disappears without it, see the ablation below) and about 0 in the simulation; it reads "close" only because the data interval is wide, not because the flow has sign memory. It is an expected miss by construction.
+**SYNTHA, close (17).** `vol_1s`, `vol_10s`, the lag-1 bounce, the sign autocorrelations at lags 1 and 10, `fill_le0` (0.6882 in the data, 0.6352 in the simulation), `fill_3_9`, `fill_all` and the depth levels not listed above: the gaps are within twice the data interval's half-width. The trade-sign autocorrelation is small in the data (0.04395 at lag 1, from the informed trader: it disappears without it, see the ablation below) and about 0 in the simulation; it reads "close" only because the data interval is wide, not because the flow has sign memory. It is an expected miss by construction.
 
-**SYNTHA, misses (4).** (1) `spread_mean`: data 2.02 ticks, calibrated 1.916 (ratio 0.9485). The baseline misses in the other direction (2.225). (2) `spread_one_tick_share`: 0.01574 of two-sided time at one tick in the data, 0.1818 in the calibrated simulation. The spread PMF is beyond the halves yardstick for both models (W1 0.228 calibrated, 0.2047 baseline, against an upper bound of 0.09685). (3) `fill_le0`: 0.8855 of the data's orders placed at or inside the touch were filled, 0.6352 in the calibrated simulation. (4) `sign_acf_lag100`: 0.05712 against -0.002384, an expected miss.
+**SYNTHA, misses (4).** (1) `spread_mean`: data 2.02 ticks, calibrated 1.916 (ratio 0.9485). The baseline misses in the other direction (2.225). (2) `spread_one_tick_share`: 0.01574 of two-sided time at one tick in the data, 0.1818 in the calibrated simulation. The spread PMF is beyond the halves yardstick for both models (W1 0.228 calibrated, 0.2047 baseline, against an upper bound of 0.09685). (3) `fill_1_2`: 0.2536 of the data's orders placed 1 or 2 ticks away were filled, 0.2786 in the simulation. (4) `sign_acf_lag100`: 0.05712 against -0.002384, an expected miss.
 
-**SYNTHB, misses (5)** (stronger informed trader). `spread_one_tick_share` and `fill_le0` miss as on SYNTHA; `spread_mean` is close (2.032 against 1.961). In addition `sign_acf_lag1` is 0.07836 in the data and -0.0006877 in the calibrated simulation, `sign_acf_lag100` is 0.08269 against -0.0007549, and `vol_1s` is 5.976e-05 in the data against 8.122e-05 in the simulation. The last one is too *high* in the simulation, so it is not volatility that the flow lacks. The baseline misses far more rows on SYNTHB (26 against 5), mostly because it runs the default noise traders' rates on a day whose noise rate was doubled; it is not a like-for-like contest on this day.
+**SYNTHB, misses (4)** (stronger informed trader). `spread_one_tick_share` misses as on SYNTHA; `spread_mean` is close (2.032 against 1.961) and `fill_le0` matches (0.6932 against 0.6737). In addition `sign_acf_lag1` is 0.07836 in the data and -0.0006877 in the calibrated simulation, `sign_acf_lag100` is 0.08269 against -0.0007549, and `vol_1s` is 5.976e-05 in the data against 8.122e-05 in the simulation. The last one is too *high* in the simulation, so it is not volatility that the flow lacks. The baseline misses far more rows on SYNTHB (24 against 4), mostly because it runs the default noise traders' rates on a day whose noise rate was doubled; it is not a like-for-like contest on this day.
 
 **Cross-ticker, SYNTHA calibration on SYNTHB.** SYNTHB trades about twice as fast as SYNTHA (limit rate 93.91 against 47.86 per second in the simulation), so the rate rows miss by a factor of about two (`lambda_limit_total` ratio 0.5097), and the deeper levels of the book are about half as full (`depth_buy_L6` ratio 0.5233). Both spread rows miss. This is the expected outcome of a calibration that does not carry over to a faster market: it measures how general the flow is, and here it is not.
 
@@ -569,8 +569,8 @@ Each cell: data (test half) / calibrated simulation, verdict.
 |---|---|---|---|---|
 | `spread_mean` | 2.02 / 1.916, miss | 2.348 / 2.385, close | 1.993 / 1.862, close | 2.229 / 2.243, match |
 | `spread_one_tick_share` | 0.01574 / 0.1818, miss | 0.0002525 / 0.01076, miss | 0.028 / 0.1978, miss | 0.0001917 / 0.001124, match |
-| `fill_le0` | 0.8855 / 0.6352, miss | 0.8784 / 0.8893, close | 0.8605 / 0.6638, miss | 0.8577 / 0.8591, match |
-| `executed_share` | 0.1809 / 0.1668, close | 0.1814 / 0.1832, match | 0.1479 / 0.1424, close | 0.1484 / 0.1531, close |
+| `fill_le0` | 0.6882 / 0.6352, close | 0.8784 / 0.8893, close | 0.7194 / 0.6638, close | 0.8577 / 0.8591, match |
+| `executed_share` | 0.1702 / 0.1668, match | 0.1814 / 0.1832, match | 0.1419 / 0.1424, match | 0.1484 / 0.1531, close |
 | `vol_1s` | 6.179e-05 / 6.807e-05, close | 5.431e-05 / 6.096e-05, close | 5.169e-05 / 5.579e-05, match | 4.847e-05 / 5.099e-05, close |
 | `vol_60s` | 0.0001904 / 0.000131, match | 0.0002094 / 0.0001414, close | 0.0001279 / 0.0001212, match | 0.0001164 / 0.0001229, match |
 | `sign_acf_lag1` | 0.04395 / -0.0003188, close | 0.04585 / 0.0005688, close | 0.007292 / 0.003771, match | 0.005217 / -0.0008536, match |
@@ -583,19 +583,19 @@ Each cell: data (test half) / calibrated simulation, verdict.
 |---|---|---|---|---|
 | `spread_mean` | 2.032 / 1.961, close | 2.314 / 2.495, miss | 2.014 / 1.886, miss | 2.194 / 2.188, match |
 | `spread_one_tick_share` | 0.01287 / 0.1614, miss | 0.0009608 / 0.002162, match | 0.01035 / 0.1652, miss | 0.0005709 / 0.001615, match |
-| `fill_le0` | 0.8974 / 0.6737, miss | 0.8865 / 0.9133, miss | 0.8844 / 0.6949, miss | 0.8713 / 0.8761, match |
-| `executed_share` | 0.2054 / 0.1885, close | 0.2074 / 0.2063, match | 0.1496 / 0.1416, miss | 0.149 / 0.15, match |
+| `fill_le0` | 0.6932 / 0.6737, match | 0.8865 / 0.9133, miss | 0.738 / 0.6949, close | 0.8713 / 0.8761, match |
+| `executed_share` | 0.1935 / 0.1885, match | 0.2074 / 0.2063, match | 0.1436 / 0.1416, match | 0.149 / 0.15, match |
 | `vol_1s` | 5.976e-05 / 8.122e-05, miss | 6.029e-05 / 7.563e-05, miss | 5.934e-05 / 6.086e-05, match | 5.577e-05 / 5.559e-05, match |
 | `vol_60s` | 0.0003196 / 0.0001388, close | 0.0003268 / 0.0001471, close | 0.0001042 / 0.0001128, match | 0.0001259 / 0.0001145, match |
 | `sign_acf_lag1` | 0.07836 / -0.0006877, miss | 0.08739 / 9.425e-05, miss | -0.005137 / 0.001001, match | 0.0004896 / 0.001081, match |
 
-- **The market maker is behind `fill_le0` and the one-tick share.** With it, the simulation fills 25 to 28% fewer orders at the touch than the data on both days; without it the gap is +1 to +3% (which the verdict rule still calls a miss on SYNTHB, because both intervals are narrow), and the one-tick share of the data is almost zero. With the noise traders alone every row of the table matches or is close, so the generator reproduces a flow of the kind it models. The independent-order flow cannot imitate a market maker's requoted, book-dependent orders even though their measured rates, sizes and lifetimes are part of the calibration.
-- **The synthetic days are not stationary.** The one-tick share falls from 33% (SYNTHA) and 36% (SYNTHB) of the first five minutes to 0% of the last fifteen (17.2% of SYNTHA's training half, 1.6% of its test half). It needs the market maker, whose inventory skew is proportional to the time left in the session, which is consistent with the decline; that mechanism was not isolated further. The calibrated simulation (18.2%) reproduces the half it was fitted on; the test half had changed. An out-of-sample miss of this kind is a property of the day as much as of the flow.
+- **The market maker is behind the one-tick share.** With it, the calibrated simulation is at one tick for 16 to 20% of the time against 1.0 to 2.8% of the data (test half); without it both are at one tick for about 1% of the time or less. With the noise traders alone no row of the full scorecard misses on either day (SYNTHA 42 match, 10 close; SYNTHB 52 match), so the generator reproduces a flow of the kind it models. The fill rows show no large market-maker effect: the calibrated `fill_le0` differs from the data by -7.7% (SYNTHA) and -2.8% (SYNTHB) with the market maker, and by +1.2% and +3.0% without it (SYNTHB's still reads miss: both intervals are narrow). An earlier version of this section reported a 25 to 28% gap and blamed the market maker; that was a measurement error in the fingerprint, which ignored orders that reuse the id of an ended order (D-395).
+- **The synthetic days are not stationary.** The one-tick share falls from 33% (SYNTHA) and 36% (SYNTHB) of the first five minutes to 0% of the last fifteen (17.2% of SYNTHA's training half, 1.6% of its test half). It needs the market maker, whose inventory skew is proportional to the time left in the session, which is consistent with the decline; that mechanism was not isolated further. The spread of the two full days is therefore driven by a day that changes as much as by the flow. The calibrated simulation (18.2%) reproduces the half it was fitted on; the test half had changed. An out-of-sample miss of this kind is a property of the day as much as of the flow.
 - **The informed trader is behind the sign memory, and behind `vol_1s` on SYNTHB.** Without it the sign autocorrelation at lag 1 is about zero in the data and matches, and `vol_1s` matches. With it, the simulation is noisier than the data at 1 s and less volatile at 60 s, where the data's volatility is 1.5 times (SYNTHA) and 2.3 times (SYNTHB) the simulation's. A likely reading, not tested: its orders enter the calibrated flow at their measured rate but without their direction, so they add noise instead of trend. The 60 s rows read "match" or "close" only because their data interval is wide.
 
 Plots (spread PMF, depth profile, survival curves, volatility against sampling interval) are drawn by every run: `build/real_data/calibration/<pair>/plots/`. In them the data survival curve is the training period's Kaplan-Meier curve, because the estimator never reads the test period.
 
-**Reading the verdicts.** With 20 seeds the simulation interval is narrow, and the rule asks for an overlap with the data's bootstrap interval, which is wide for 30 minutes of data; "close" is therefore a gap of up to twice that width. Nothing was tuned to improve any row.
+**Reading the verdicts.** With 20 seeds the simulation interval is narrow, and the rule asks for an overlap with the data's bootstrap interval, which is wide for 30 minutes of data; "close" is a gap between the intervals of up to twice the data interval's half-width, that is, one full width. Nothing was tuned to improve any row.
 
 ## 9. Known gaps
 
@@ -603,7 +603,7 @@ Said plainly, with nothing tuned to hide them:
 
 - **Trade-sign memory and volatility clustering are expected misses.** The calibrated flow is zero-intelligence: each order's side is drawn independently, so the autocorrelation of aggressive-order signs is about zero by construction, while real signs have long memory [9]. Volatility clustering needs state-dependent behaviour the flow does not have. On the synthetic days the sign autocorrelation of the data comes from the informed trader, which the calibrated flow runs without.
 - **No state dependence.** Rates and placements do not depend on the book state, as in queue-reactive models [10], and there is no intraday rate profile. The measured rates are one average over the window.
-- **What the dress rehearsal showed (synthetic).** `spread_one_tick_share` and `fill_le0` miss on both synthetic days, and the spread distribution is beyond the halves yardstick for both models. The ablation in section 8 ties both rows to the market maker: without it the fill gap falls from about 25% to at most 3% and the one-tick share nearly vanishes from both the data and the simulation, and with the noise traders alone every row matches or is close. The share of time at one tick also changes within the day, so part of that miss is the test half differing from the training half. On SYNTHB the informed trader's footprint shows in the sign autocorrelation and in `vol_1s`, which the simulation overstates.
+- **What the dress rehearsal showed (synthetic).** `spread_one_tick_share` misses on both synthetic days and the spread distribution is beyond the halves yardstick for both models. The ablation in section 8 ties that row to the market maker, and the share of time at one tick also changes within the day, so part of that miss is the test half differing from the training half. With the noise traders alone no row of the full scorecard misses. On SYNTHB the informed trader's footprint shows in the sign autocorrelation and in `vol_1s`, which the simulation overstates.
 - **Known estimator bias.** With price-window-filtered data, $\lambda_L$ and the far tail of the placement PMF are underestimated (section 3, measured in section 5).
 - **A day where a spread bucket is never visited** gives the estimator nothing for that bucket: the simulator draws from the nearest bucket of the same side that has samples, counts every such draw, and `validate` names the empty buckets (D-385). A side with no placement samples at all is still refused.
 

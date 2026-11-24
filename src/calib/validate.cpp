@@ -703,7 +703,8 @@ ValidateResult run_validation(const ValidateOptions& o, const EstimateFn& estima
   j["train"] = {{"from_s", o.train.from_ns / kNs}, {"to_s", o.train.to_ns / kNs}, {"window_note", cal.window_note}};
   j["test"] = {{"from_s", o.test.from_ns / kNs}, {"to_s", o.test.to_ns / kNs}};
   j["leakage"] = leakage;
-  j["data_checks"] = {{"resubmitted_order_ids", data_fp.duplicate_order_ids},
+  j["data_checks"] = {{"resubmitted_order_ids", data_fp.reused_order_ids},
+                      {"ids_submitted_while_resting", data_fp.duplicate_order_ids},
                       {"messages_in_test_period", data_fp.messages}};
   j["bootstrap"] = {{"degenerate", data_boot.degenerate},
                     {"block_seconds_used", data_boot.block_seconds_used},
