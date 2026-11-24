@@ -270,6 +270,7 @@ json to_json(const Fingerprint& f) {
   j["lambda_market_per_s"] = {{"buy", f.lambda_market[kBuy]}, {"sell", f.lambda_market[kSell]}, {"total", f.lambda_market_total}};
   j["off_grid_rows"] = f.off_grid_rows;
   j["duplicate_order_ids"] = f.duplicate_order_ids;
+  j["reused_order_ids"] = f.reused_order_ids;
   json sc = json::object();
   for (const NamedScalar& s : scalars(f)) sc[s.name] = s.value;
   j["scalars"] = sc;

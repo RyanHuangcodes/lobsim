@@ -21,6 +21,7 @@ import argparse
 import math
 import os
 import sys
+from decimal import Decimal
 
 SCALE = 10**9
 NS = 10**9
@@ -77,7 +78,8 @@ def placement_bucket(bucket):
 
 def survival(t_ns):
     fast = FAST_SHARE if t_ns < FAST_NS else 0.0
-    return fast + (1.0 - FAST_SHARE) * math.exp(-t_ns / SLOW_MEAN_NS)
+    # Decimal, not math.exp: the last bit of exp() differs between C libraries, and --check compares bytes.
+    return fast + (1.0 - FAST_SHARE) * float(Decimal(-t_ns / SLOW_MEAN_NS).exp())
 
 
 def lifetime_curve():

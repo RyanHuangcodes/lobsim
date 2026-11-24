@@ -33,7 +33,7 @@ struct Prepared::Impl {
   std::vector<Channel> chans;  // [0] additive, then one per SeriesId
   std::size_t acc_size{0};
   std::vector<int> series_lags[kSeriesCount];
-  std::uint64_t off_grid_rows{0}, duplicate_ids{0};
+  std::uint64_t off_grid_rows{0}, duplicate_ids{0}, reused_ids{0};
 
   void add_range(std::vector<double>& acc, int s, int e) const;
   Fingerprint build(const std::vector<double>& acc, std::int64_t from_ns, std::int64_t to_ns) const;

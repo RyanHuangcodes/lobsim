@@ -7,7 +7,7 @@ if(GIT)
     OUTPUT_VARIABLE _head RESULT_VARIABLE _rc OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
   if(_rc EQUAL 0 AND _head MATCHES "^[0-9a-f]+$")
     set(_commit ${_head})
-    execute_process(COMMAND ${GIT} status --porcelain --untracked-files=no WORKING_DIRECTORY ${SRC}
+    execute_process(COMMAND ${GIT} --no-optional-locks status --porcelain --untracked-files=no WORKING_DIRECTORY ${SRC}
       OUTPUT_VARIABLE _changes RESULT_VARIABLE _rc2 ERROR_QUIET)
     if(_rc2 EQUAL 0 AND NOT _changes STREQUAL "")
       string(APPEND _commit "-dirty")

@@ -221,6 +221,33 @@ TEST(CalibratedFlow, OneSidedBookFallbacks) {
   }
 }
 
+// A spread bucket with no samples draws from a narrower one (D-385): its Delta is measured from the spread it
+// was observed at, i.e. from the opposite best -+ that spread (D-399), so a wide spread can close again.
+TEST(CalibratedFlow, ANarrowerFallbackBucketIsMeasuredFromItsOwnSpread) {
+  const auto price_for = [](int side, int bucket, std::int64_t delta, const BBO& book) {
+    auto cal = make_cal();
+    for (int b = 0; b < 3; ++b) cal->placement[side][b] = calib::Pmf{};
+    cal->placement[side][bucket] = pmf({delta}, {1});
+    cal->rates.limit = {calib::Rate{0, side == calib::kBuy ? 3.0 : 0.0}, calib::Rate{0, side == calib::kSell ? 3.0 : 0.0}};
+    CalibratedFlowAgent a(params(cal), Xoshiro256StarStar(1));
+    MultiCtx ctx(3);
+    a.on_start(ctx);
+    a.on_market_data(ctx, book);
+    ctx.fire(a);
+    EXPECT_EQ(a.counters().placement_bucket_fallback, 1u);
+    EXPECT_EQ(a.counters().placement_clamped, 0u);
+    return ctx.last_new().price;
+  };
+  const BBO wide{100, 5, 105, 5};  // spread 5: bucket "3+"
+  // Only bucket "1" has samples: an order observed at a 1-tick spread joins next to the opposite best.
+  EXPECT_EQ(price_for(calib::kSell, 0, 0, wide), 101);
+  EXPECT_EQ(price_for(calib::kSell, 0, 2, wide), 103);
+  EXPECT_EQ(price_for(calib::kBuy, 0, 0, wide), 104);
+  // Only bucket "2": two ticks from the opposite best, and Delta -1 is one tick inside that.
+  EXPECT_EQ(price_for(calib::kSell, 1, -1, wide), 101);
+  EXPECT_EQ(price_for(calib::kBuy, 1, 0, wide), 103);
+}
+
 TEST(CalibratedFlow, CrossingPlacementsAreRedrawn) {
   auto cal = make_cal();
   cal->rates.limit = {calib::Rate{0, 3.0}, calib::Rate{0, 0.0}};
@@ -574,6 +601,46 @@ TEST(CalibratedConfig, OneEmptyPlacementBucketFallsBackToTheNearestNonEmptyOne) 
   const auto& agent = dynamic_cast<const CalibratedFlowAgent&>(s.agent(*s.background_index()));
   EXPECT_GT(agent.counters().limits_sent, 0u);
   EXPECT_GT(agent.counters().placement_bucket_fallback, 0u);
+}
+
+// The same rule on a whole run: calibrated on a stock whose spread was always one tick, the simulated spread must come
+// back to one tick instead of freezing at whatever the first orders left (every Delta of bucket "1" is >= 0).
+TEST(CalibratedFlow, AStockThatWasAlwaysOneTickWideStaysNarrow) {
+  struct SpreadTime final : Observer {
+    TimeNs last{0};
+    std::int64_t spread{0};
+    double at_one{0}, total{0};
+    void on_book(TimeNs now, const BBO& top, bool) override {
+      if (spread > 0 && now > 60'000'000'000) {
+        const double dt = static_cast<double>(now - std::max<TimeNs>(last, 60'000'000'000));
+        total += dt;
+        if (spread == 1) at_one += dt;
+      }
+      last = now;
+      spread = top.two_sided() ? top.ask - top.bid : 0;
+    }
+  };
+  for (std::uint64_t seed = 1; seed <= 6; ++seed) {
+    SimConfig c = parse_config(run_json(), kFixtures);
+    auto cal = std::make_shared<calib::Calibration>(*c.background->calibration);
+    for (int s = 0; s < 2; ++s) {
+      cal->placement[s][0] = pmf({0, 1, 2}, {6, 3, 1});
+      cal->placement[s][1] = calib::Pmf{};
+      cal->placement[s][2] = calib::Pmf{};
+      cal->rates.limit[s].per_s = 10.0;
+      cal->rates.aggressive[s].per_s = 1.0;
+    }
+    c.background->calibration = cal;
+    c.seed = seed;
+    c.duration_s = 600.0;
+    finalize(c);
+    Simulator sim(c);
+    SpreadTime obs;
+    sim.add_observer(&obs);
+    sim.run();
+    ASSERT_GT(obs.total, 0.0);
+    EXPECT_GT(obs.at_one / obs.total, 0.5) << "seed " << seed;
+  }
 }
 
 TEST(CalibratedConfig, AbsentSectionLeavesTheConfigUntouched) {

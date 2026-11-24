@@ -10,6 +10,7 @@
 #include <limits>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include "calib/fingerprint_impl.hpp"
@@ -59,6 +60,7 @@ struct Bin {
 struct Order {
   int bin;
   std::int64_t size;
+  std::int64_t remaining;  // what cancels and fills have left
   int bucket;  // -1: no best price on its side before it
   std::int64_t executed{0};
   bool filled{false};
@@ -164,7 +166,8 @@ Prepared Prepared::from_streams(std::istream& messages, std::istream& orderbook,
 
   std::vector<Bin> bins;
   std::vector<Order> orders;
-  std::unordered_map<std::int64_t, std::size_t> order_of_id;
+  std::unordered_map<std::int64_t, std::size_t> order_of_id;  // resting orders submitted in the window
+  std::unordered_set<std::int64_t> ended_ids;                 // ids of orders of the window that have ended
   std::vector<Burst> bursts;
   std::array<std::vector<double>, kFingerprintClocks> lm;       // log(ask + bid) on each clock grid
   std::array<std::int64_t, kFingerprintClocks> next_g{};
@@ -291,16 +294,28 @@ Prepared Prepared::from_streams(std::istream& messages, std::istream& orderbook,
       }
       const auto ins = order_of_id.emplace(msg.order_id, orders.size());
       if (ins.second) {
-        orders.push_back(Order{static_cast<int>(bin), msg.size, bucket});
+        // The estimator's rule (D-309): an id whose earlier order has ended starts a new order.
+        if (ended_ids.erase(msg.order_id) != 0) ++I.reused_ids;
+        orders.push_back(Order{static_cast<int>(bin), msg.size, msg.size, bucket});
       } else {
         ++I.duplicate_ids;
       }
-    } else if (type == 4) {
+    } else if (type == 2 || type == 3 || type == 4) {
       const auto it = order_of_id.find(msg.order_id);
       if (it != order_of_id.end()) {
-        orders[it->second].executed += msg.size;
-        orders[it->second].filled = true;
+        Order& o = orders[it->second];
+        if (type == 4) {
+          o.executed += msg.size;
+          o.filled = true;
+        }
+        o.remaining -= msg.size;
+        if (type == 3 || o.remaining <= 0) {
+          ended_ids.insert(msg.order_id);
+          order_of_id.erase(it);
+        }
       }
+    }
+    if (type == 4) {
       if (new_burst_run) {  // a burst: the aggressor is on the side opposite to the resting order
         const int sign = -dir;
         bursts.push_back(Burst{static_cast<int>(bin), sign});
@@ -486,6 +501,7 @@ Fingerprint Prepared::Impl::build(const std::vector<double>& acc, std::int64_t f
   f.crossed_ns = ns(o_crossed);
   f.off_grid_rows = off_grid_rows;
   f.duplicate_order_ids = duplicate_ids;
+  f.reused_order_ids = reused_ids;
   double wsum = 0, vsum = 0, one_tick = 0;
   for (std::size_t v = 0; v < spread_values.size(); ++v) {
     const std::int64_t h = ns(o_hist + v);

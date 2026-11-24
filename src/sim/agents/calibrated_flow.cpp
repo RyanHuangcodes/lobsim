@@ -143,6 +143,14 @@ void CalibratedFlowAgent::send_limit(Context& ctx) {
 
   const int source = placement_source_[side_idx][bucket];
   if (source != bucket) ++counters_.placement_bucket_fallback;
+  if (source < bucket && bbo_.two_sided()) {
+    // The PMF was observed at a narrower spread than this one (source + 1 ticks), where its Delta was measured from the
+    // own best: here that is the opposite best -+ that spread. Measured from the own best instead, an order of bucket
+    // "1" (every Delta >= 0) could never narrow a spread that has widened (D-399).
+    const lob::Price observed = source + 1;
+    ref = side == lob::Side::Buy ? bbo_.ask - observed : bbo_.bid + observed;
+    bound = -(observed - 1);
+  }
   const CumulativeTable& table = placement_[side_idx][source];
   std::int64_t delta = table.sample(rng);
   if (bound && delta < *bound) {

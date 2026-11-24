@@ -225,6 +225,44 @@ TEST(FingerprintInput, BurstRules) {
   EXPECT_DOUBLE_EQ(f.lambda_market[kSell], 3.0 / 3.0);
 }
 
+TEST(FingerprintFills, AnIdReusedAfterItsOrderEndedIsANewOrder) {
+  // The rule of the estimator (D-309): a type 1 whose id is still resting keeps the first order and is
+  // counted; one whose order has ended (deleted, or used up by cancels or fills) is a new order.
+  const char* rows[] = {
+      "0.500000000,1,99,1,90,1",   // before the window: only the book in force when it opens
+      "1.000000000,1,1,10,100,1",  // id 1, buy 10 at the best bid: Delta 0
+      "2.000000000,3,1,10,100,1",  // deleted
+      "3.000000000,1,1,10,100,1",  // the same id again: a new order
+      "4.000000000,4,1,4,100,1",   // executed 4 -> only the new order is filled
+      "5.000000000,1,2,10,100,1",  // id 2
+      "6.000000000,1,2,10,100,1",  // id 2 is still resting: duplicate, the first order keeps it
+      "7.000000000,4,2,3,100,1",   // fills id 2's first (only) order
+      "8.000000000,1,3,5,100,1",   // id 3
+      "9.000000000,4,3,5,100,1",   // used up by a fill: ends
+      "10.000000000,1,3,5,100,1",  // a new order
+      "11.000000000,1,4,5,100,1",  // id 4
+      "12.000000000,2,4,5,100,1",  // used up by a cancel: ends
+      "13.000000000,1,4,5,100,1",  // a new order, never filled
+  };
+  std::string m, b;
+  for (const char* r : rows) {
+    m += std::string(r) + "\n";
+    b += "101,5,100,5\n";
+  }
+  std::istringstream ms(m), bs(b);
+  const Fingerprint f = compute_fingerprint(ms, bs, 1, win(1, 14));
+  // Orders: 1 (deleted), 1 again (filled), 2 (filled), 3 (filled), 3 again, 4 (cancelled), 4 again = 7; filled 3.
+  EXPECT_EQ(f.fill[0].orders, 7u);
+  EXPECT_EQ(f.fill[0].filled, 3u);
+  EXPECT_EQ(f.fill_all.orders, 7u);
+  EXPECT_EQ(f.reused_order_ids, 3u);
+  EXPECT_EQ(f.duplicate_order_ids, 1u);  // id 2's second submission
+  // Executed 4 + 3 + 5 = 12 of the submitted 10 + 10 + 10 + 5 + 5 + 5 + 5 = 50 (the duplicate is not an order).
+  EXPECT_DOUBLE_EQ(f.executed_share, 12.0 / 50.0);
+  // Every type 1 is still an event of the input rate (8 of them, as the estimator counts them) over 13 s.
+  EXPECT_DOUBLE_EQ(f.lambda_limit_total, 8.0 / 13.0);
+}
+
 TEST(FingerprintDistances, HandChecked) {
   Fingerprint a, b;
   a.spread_pmf = {{1, 2}, {3, 7}};

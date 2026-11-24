@@ -95,7 +95,8 @@ struct Fingerprint {
   double lambda_market_total{0.0};
   // ---- what the whole file showed (not additive, so copied unchanged into every derived fingerprint)
   std::uint64_t off_grid_rows{0};         // two-sided rows whose spread is not a whole number of ticks (truncated)
-  std::uint64_t duplicate_order_ids{0};   // type 1 messages in the window whose id was already submitted in it
+  std::uint64_t duplicate_order_ids{0};   // type 1 messages whose id is still resting (the first order keeps it)
+  std::uint64_t reused_order_ids{0};      // type 1 messages whose id's earlier order in the window had ended: new orders
 };
 
 // One scalar of the scorecard, by name. NaN = undefined (no data for it).
