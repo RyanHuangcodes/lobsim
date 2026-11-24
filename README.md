@@ -306,7 +306,7 @@ The numbers below are from runs started when the machine's one-minute load avera
 
 The stream is 10,000,000 seeded messages shaped like the noise traders' flow: 85% limit and 15% market orders among new orders, limit prices 1 to 10 ticks from a slowly drifting reference price, sizes 1 to 10 lots, and every limit order cancelled after an exponentially distributed lifetime. A cancel is sent even when its order has already been filled, so 1,175,093 of the 10,000,000 messages are rejected with `UnknownOrder`. The run ends with 957 resting orders on 36 price levels. Message generation is outside every timed region.
 
-Run 3 of three, the run with the median throughput:
+Run 3 of three, the run with the median throughput. These M4 numbers were measured before the harness sized the order-id index up front, so the per-message maximum below is the old spike; a rerun on the M4 is pending. The before-and-after measurement on another machine is in the notes under the table.
 
 | Measurement | Result |
 |---|---|
@@ -326,24 +326,23 @@ How to read it:
 - **Use the block-timed row for the average.** It times 4,096 messages with one timer pair, so the timer's step and cost are negligible.
 - **Use the batch-of-32 row for the body of the distribution.** Each sample is the mean of 32 consecutive messages. It resolves the body (p50 20 ns, p99 26 ns) but averages away single slow messages. The timer adds under 1 ns per message to these samples: a sample includes roughly the cost of one clock read (13 to 16 ns), shared by 32 messages.
 - **Use the per-message row for the far tail and the maximum only.** There a 41 ns step no longer matters.
-- **The maximum is the order-id index growing.** Orders are looked up through a `std::vector` indexed by order id, which doubles when it is full. With 5.4 million order ids it grows to 64 MB during this run, and the message that triggers the copy pays for it. The worst message grows with the largest doubling. Over all the runs measured, with the one-minute load average between 1.8 and 4.6, it was 0.55 to 0.73 ms in 1.8-million-message runs, 1.2 to 1.5 ms at 3.6 million, and 4.0 to 10.4 ms at 10 million. A scratch build that sizes the index for 16 million ids up front brought the 10-million-message maximum down to 24 to 45 µs, so reserving the index removes it.
+- **The old maximum was the order-id index growing, and pre-sizing removes it.** Orders are looked up through a `std::vector` indexed by order id, which doubles when it is full, and the message that triggers a doubling pays for copying every slot. With 5.4 million order ids it reached 64 MB during this run, and on the M4 the worst message took 4.0 to 10.4 ms. The harness now sets `BookConfig::expected_order_ids` to the message count, so the index is sized before the first message and no message pays for growing it. Measured on an Intel Xeon Platinum 8488C (GCC 11.5, Release, one-minute load average 1.5 to 1.8), three runs of each build, interleaved: the per-message maximum fell from 27.7 to 28.3 ms to 36 to 90 µs, and the batch-of-32 maximum from 0.88 ms to 1.1 to 1.5 µs. The p50 to p99.9 rows did not change. Block-timed throughput rose from 26.0 to 26.2 to 30.7 to 31.0 million msgs/s on that machine. Most of that is work moved out of the timed region: the 80 MB index is now allocated and zeroed in the constructor. The event hash is the same in all six runs. The simulator keeps the default of 0 (grow on demand), because its runs have far fewer orders and 8 bytes per expected id would be wasted.
 - **Run-to-run variation.** Over three runs throughput was 45.4, 47.5 and 49.2 million msgs/s, and the speed-up over `ReferenceBook` was 30x to 31x. The batch-of-32 percentiles moved by at most 1 ns.
 
 ### Heap allocations
 
 Global `operator new` is replaced in the `lobsim_bench` binary only and counts allocations made while an engine call is running. The caller's event buffer is reserved once and never grows, so every counted allocation is the engine's own.
 
-In the 10,000,000-message run there were 129,865 allocations, 0.0130 per message:
+In the 10,000,000-message run there were 129,842 allocations, 0.0130 per message. The stream is seeded, so this count is the same on every machine:
 
 | Allocation size | Count | What it is |
 |---|---|---|
 | 80 bytes | 129,839 | a `std::map` node, one per newly created price level |
-| 16 bytes to 64 MB, doubling | 23 | growth of the id index vector |
 | 262,144 bytes | 1 | the one chunk of 4,096 orders the pool needed |
 | 32,768 bytes | 1 | the pool's free list for that chunk |
 | 8 bytes | 1 | the pool's list of chunks |
 
-This matches what the design predicts: allocations happen only when a price level is created or when the pool or a vector grows. The audit below counts allocations per kind of operation on a warm book, where the pool and the id index have already grown:
+This matches what the design predicts: allocations happen only when a price level is created or when the pool grows. The id index makes none, because the harness sizes it before the run (`BookConfig::expected_order_ids`). Without that, it grew 23 times, from 16 bytes to 64 MB, inside engine calls (129,865 allocations in total). The audit below counts allocations per kind of operation on a warm book, where the pool and the id index have already grown:
 
 | Operation | Operations | Allocations | Deallocations |
 |---|---|---|---|

@@ -312,7 +312,9 @@ template <class Book>
 PassResult run_pass(std::uint64_t seed, std::uint64_t messages, std::size_t batch) {
   PassResult r;
   r.ns_per_message.reserve(static_cast<std::size_t>(messages / batch + 1));
-  Book book{BookConfig{Stream::kMaxPrice}};
+  // Each message is at most one new order, so `messages` bounds the ids: the id index is sized up
+  // front and no message pays for growing it (D-260). ReferenceBook ignores the field.
+  Book book{BookConfig{Stream::kMaxPrice, static_cast<std::size_t>(messages)}};
   Stream stream(seed);
   std::vector<Request> block;
   block.reserve(kBlock);
@@ -574,6 +576,8 @@ int main(int argc, char** argv) {
 
   const std::string env = cpu_model() + "; " + compiler() + "; " + LOBSIM_BUILD_TYPE + "; flags: " + LOBSIM_CXX_FLAGS;
   std::printf("lobsim_bench\n  machine and build: %s\n", env.c_str());
+  std::printf("  OrderBook id index pre-sized for %" PRIu64 " order ids (BookConfig::expected_order_ids = the message count)\n",
+              messages);
 #ifndef NDEBUG
   std::printf("  WARNING: NDEBUG is not defined. This is not an optimised build (and the book validates itself\n"
               "  after every message). The numbers below are NOT benchmark results.\n");
@@ -664,7 +668,7 @@ int main(int argc, char** argv) {
   if (thr.allocs.other_sizes != 0) std::printf("    (other sizes) x %" PRIu64 "\n", thr.allocs.other_sizes);
   if (small_allocs != 0)
     std::printf("  The %zu-byte allocations are std::map nodes, one per new price level. The larger ones are growth\n"
-                "  of the order pool (a chunk of orders plus its free list) and of the id-indexed lookup vector.\n",
+                "  of the order pool (a chunk of orders plus its free list); the id index was sized before the run.\n",
                 small_size);
   std::printf("\n");
 

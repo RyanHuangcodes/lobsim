@@ -205,7 +205,8 @@ add_executable(lob_tests
   tests/unit/conservation_test.cpp
   tests/unit/pool_test.cpp
   tests/unit/order_book_validate_test.cpp
-  tests/unit/builder_test.cpp)
+  tests/unit/builder_test.cpp
+  tests/unit/presize_test.cpp)
 target_include_directories(lob_tests PRIVATE tests)
 target_link_libraries(lob_tests PRIVATE lob lobsim_options GTest::gtest_main)
 gtest_discover_tests(lob_tests)

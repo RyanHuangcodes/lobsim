@@ -12,7 +12,10 @@
 
 namespace lob {
 
-OrderBook::OrderBook(BookConfig cfg) : cfg_(cfg) {}
+OrderBook::OrderBook(BookConfig cfg) : cfg_(cfg) {
+  // resize, not reserve: rest() grows the index with resize, so slots must exist and be null (D-261).
+  if (cfg_.expected_order_ids > 0) index_.resize(cfg_.expected_order_ids + 1, nullptr);
+}
 
 // ---------------------------------------------------------------- helpers
 
