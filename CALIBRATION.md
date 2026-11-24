@@ -225,7 +225,7 @@ In the ≥ 10 bucket 26,374 of 26,591 orders are censored at once and 198 cancel
 
 ### Results: filtered, L = 10
 
-The export real data resembles: the price-window filter at L = 10. The rates and the tails are biases to be measured; the judged rows use the filtered rules and all pass on this seed (the ≥ 10 median passes its 20% rule on 198 cancellations, which is luck as much as accuracy: see above).
+The export real data resembles: the price-window filter at L = 10. The rates and the tails are biases to be measured; the judged rows use the filtered rules and all pass on this seed. **That is luck on one bucket:** over seeds 1 to 10 the filtered comparison passes in 5 and fails in 5 (seeds 4, 6, 8, 9 and 10), every time only on the ≥ 10 median (20% rule, about 200 cancellations), which is off by 20% to 54%. The other nine filtered checks pass in all ten.
 
 | check | truth | estimate | value | tolerance | verdict |
 |---|---|---|---|---|---|
