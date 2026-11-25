@@ -20,6 +20,7 @@
 
 #include "lob/events.hpp"
 #include "sim/agents/as_market_maker.hpp"
+#include "sim/agents/calibrated_flow.hpp"
 #include "sim/config.hpp"
 #include "sim/metrics.hpp"
 #include "sim/simulator.hpp"
@@ -218,6 +219,22 @@ int main(int argc, char** argv) {
       }
       std::printf("mm rejects           %s\n", rejects.empty() ? "none" : rejects.c_str());
       std::printf("mm anomalies         %" PRIu64 "\n", mm.anomalies());
+    }
+    if (const auto bi = simulator.background_index()) {
+      const auto& bg = dynamic_cast<const sim::CalibratedFlowAgent&>(simulator.agent(*bi));
+      const sim::CalibratedFlowCounters& k = bg.counters();
+      std::printf("background           calibrated flow (%s, %s), %u owner ids\n", cfg.background->calibration->source.c_str(),
+                  cfg.background->file.c_str(), static_cast<unsigned>(cfg.background->owner_count));
+      std::printf("background orders    %" PRIu64 " limit, %" PRIu64 " market (rates %.4f and %.4f per s configured)\n",
+                  k.limits_sent, k.markets_sent, bg.limit_rate(), bg.aggressive_rate());
+      std::printf("background placement %" PRIu64 " redraws, %" PRIu64 " clamped to the crossing bound, %" PRIu64
+                  " price clamps; fallbacks: %" PRIu64 " one-sided book, %" PRIu64 " empty book\n",
+                  k.placement_redraws, k.placement_clamped, k.price_clamped, k.fallback_one_sided, k.fallback_empty);
+      std::printf("background buckets   %" PRIu64 " placements drawn from the nearest non-empty spread bucket\n",
+                  k.placement_bucket_fallback);
+      std::printf("background cancels   %" PRIu64 " scheduled, %" PRIu64 " no-cancel draws, %" PRIu64 " sent, %" PRIu64
+                  " rejects ignored\n",
+                  k.cancels_scheduled, k.no_cancel_draws, k.cancels_sent, k.ignored_rejects);
     }
     print_metrics(cfg, metrics.summary());
 

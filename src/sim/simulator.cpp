@@ -5,6 +5,7 @@
 #include <variant>
 
 #include "sim/agents/as_market_maker.hpp"
+#include "sim/agents/calibrated_flow.hpp"
 #include "sim/agents/informed_trader.hpp"
 #include "sim/agents/noise_trader.hpp"
 
@@ -17,6 +18,8 @@ struct Simulator::Slot {
   Xoshiro256StarStar decision_rng;
   Xoshiro256StarStar latency_rng;
   std::unique_ptr<AgentContext> ctx;
+  lob::OwnerId extra_first{0};   // the agent's extra owner ids are [extra_first, extra_first + extra_count)
+  std::uint32_t extra_count{0};
 };
 
 class Simulator::AgentContext final : public Context {
@@ -39,6 +42,14 @@ class Simulator::AgentContext final : public Context {
 
   Xoshiro256StarStar& rng() override { return sim_.agents_[index_]->decision_rng; }
   lob::OwnerId self() const override { return index_ + 1; }
+  std::uint32_t owner_count() const override { return 1 + sim_.agents_[index_]->extra_count; }
+  lob::OwnerId owner_id(std::uint32_t k) const override {
+    return k == 0 ? index_ + 1 : sim_.agents_[index_]->extra_first + (k - 1);
+  }
+  bool owns(lob::OwnerId owner) const override {
+    const Slot& s = *sim_.agents_[index_];
+    return owner == index_ + 1 || (owner >= s.extra_first && owner - s.extra_first < s.extra_count);
+  }
 
  private:
   Simulator& sim_;
@@ -90,6 +101,18 @@ Simulator::Simulator(const SimConfig& cfg, Options options)
     market_maker_ = add_agent(std::make_unique<AvellanedaStoikovMM>(mp, cfg_.requote_interval_ns, cfg_.duration_ns),
                               mc.latency, StreamRole::MarketMaker, 0);
   }
+  // The calibrated background flow comes last, so no other agent's index (owner id) changes.
+  if (cfg_.background) {
+    const BackgroundConfig& bc = *cfg_.background;
+    CalibratedFlowParams cp;
+    cp.calibration = bc.calibration;
+    cp.start_price = bc.start_price ? *bc.start_price : bc.calibration->median_mid_ticks;
+    cp.max_price = cfg_.max_price;
+    background_ = add_agent(std::make_unique<CalibratedFlowAgent>(
+                                cp, make_stream(cfg_.seed, StreamRole::CalibratedFlow, 0, StreamPurpose::Lifetimes)),
+                            bc.latency, StreamRole::CalibratedFlow, 0);
+    set_owner_count(*background_, bc.owner_count);
+  }
 }
 
 Simulator::~Simulator() = default;
@@ -102,10 +125,24 @@ AgentIndex Simulator::add_agent(std::unique_ptr<Agent> agent, const LatencySpec&
                                           Channel(latency.response, latency.jitter),
                                           Channel(latency.feed, latency.jitter),
                                           make_stream(cfg_.seed, role, index, StreamPurpose::Decisions),
-                                          make_stream(cfg_.seed, role, index, StreamPurpose::Latency), nullptr});
+                                          make_stream(cfg_.seed, role, index, StreamPurpose::Latency), nullptr,
+                                          0, 0});
   slot->ctx = std::make_unique<AgentContext>(*this, at);
   agents_.push_back(std::move(slot));
   return at;
+}
+
+void Simulator::set_owner_count(AgentIndex agent, std::uint32_t count) {
+  if (ran_) throw std::logic_error("Simulator: set_owner_count after run()");
+  if (agent >= agents_.size()) throw std::logic_error("Simulator: set_owner_count for an unknown agent");
+  if (count < 1) throw std::logic_error("Simulator: an agent needs at least one owner id");
+  Slot& slot = *agents_[agent];
+  if (slot.extra_count != 0) throw std::logic_error("Simulator: set_owner_count called twice for one agent");
+  if (count - 1 > ~lob::OwnerId{0} - kExtraOwnerBase - extra_owner_agent_.size())
+    throw std::logic_error("Simulator: too many owner ids");
+  slot.extra_first = kExtraOwnerBase + static_cast<lob::OwnerId>(extra_owner_agent_.size());
+  slot.extra_count = count - 1;
+  extra_owner_agent_.insert(extra_owner_agent_.end(), count - 1, agent);
 }
 
 void Simulator::add_observer(Observer* observer) { observers_.push_back(observer); }
@@ -113,16 +150,33 @@ void Simulator::add_observer(Observer* observer) { observers_.push_back(observer
 Agent& Simulator::agent(AgentIndex i) { return *agents_.at(i)->agent; }
 const Agent& Simulator::agent(AgentIndex i) const { return *agents_.at(i)->agent; }
 
-void Simulator::deliver_private(lob::OwnerId owner, const lob::Event& event) {
+AgentIndex Simulator::agent_of_owner(lob::OwnerId owner) const {
+  if (owner >= kExtraOwnerBase) {
+    if (owner - kExtraOwnerBase >= extra_owner_agent_.size()) throw std::logic_error("Simulator: event for an unknown owner");
+    return extra_owner_agent_[owner - kExtraOwnerBase];
+  }
   if (owner == 0 || owner > agents_.size()) throw std::logic_error("Simulator: event for an unknown owner");
-  const AgentIndex to = owner - 1;
+  return owner - 1;
+}
+
+void Simulator::deliver_private(lob::OwnerId owner, const lob::Event& event) {
+  const AgentIndex to = agent_of_owner(owner);
   Slot& slot = *agents_[to];
   queue_.schedule(slot.response.arrival(now_, slot.latency_rng), EventKind::PrivateDelivery, to, event);
 }
 
 void Simulator::handle_request(const SimEvent& ev) {
-  const lob::OwnerId sender = ev.agent + 1;
-  const lob::Request request = with_owner(std::get<lob::Request>(ev.payload), sender);
+  // The owner on the request is kept if it is one of the sender's own ids, else replaced by
+  // the sender's (an agent cannot act for another owner).
+  lob::OwnerId sender = ev.agent + 1;
+  const lob::Request& sent = std::get<lob::Request>(ev.payload);
+  {
+    const Slot& slot = *agents_[ev.agent];
+    const lob::OwnerId asked = std::visit([](const auto& r) { return r.owner; }, sent);
+    if (slot.extra_count != 0 && asked >= slot.extra_first && asked - slot.extra_first < slot.extra_count)
+      sender = asked;
+  }
+  const lob::Request request = with_owner(sent, sender);
   for (Observer* o : observers_) o->on_request(now_, request);
 
   const ExchangeOutput& out = exchange_.process(now_, sender, request);
@@ -131,7 +185,8 @@ void Simulator::handle_request(const SimEvent& ev) {
     for (Observer* o : observers_) o->on_engine_event(now_, event);
     if (const auto* t = std::get_if<lob::Trade>(&event)) {
       deliver_private(t->maker_owner, event);
-      if (t->taker_owner != t->maker_owner) deliver_private(t->taker_owner, event);
+      // Once per agent: one agent may be both sides of a trade under two of its owner ids.
+      if (agent_of_owner(t->taker_owner) != agent_of_owner(t->maker_owner)) deliver_private(t->taker_owner, event);
     } else {
       const lob::OwnerId owner = std::visit(
           [](const auto& e) -> lob::OwnerId {

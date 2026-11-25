@@ -209,6 +209,7 @@ endif()
 
 # The simulator. It depends on lob; lob does not depend on it.
 add_library(sim STATIC
+  src/sim/agents/calibrated_flow.cpp
   src/sim/as_market_maker.cpp
   src/sim/config.cpp
   src/sim/exchange.cpp
@@ -216,7 +217,7 @@ add_library(sim STATIC
   src/sim/metrics.cpp
   src/sim/noise_trader.cpp
   src/sim/simulator.cpp)
-target_link_libraries(sim PUBLIC lob orderlog nlohmann_json::nlohmann_json PRIVATE lobsim_options)
+target_link_libraries(sim PUBLIC lob orderlog calibfile nlohmann_json::nlohmann_json PRIVATE lobsim_options)
 # No fused multiply-add: floating-point results must not depend on the build type. PUBLIC,
 # because the generators and the fundamental value are inline in headers and are compiled
 # into whatever uses them.
@@ -231,8 +232,11 @@ target_link_libraries(lobsim_replay PRIVATE sim lobsim_options)
 # LOBSTER replay (upgrade 2): the replayer, and the exporter that turns a simulator run into LOBSTER files.
 add_executable(lobsim_lobster apps/lobster_main.cpp)
 target_link_libraries(lobsim_lobster PRIVATE replay lobsim_options)
+# The exporter's core is a library (upgrade 3, C5) so that `lobsim_calibrate validate` can export simulations in-process.
+add_library(lobster_export STATIC src/sim/lobster_export.cpp)
+target_link_libraries(lobster_export PUBLIC orderlog replay lob PRIVATE lobsim_options)
 add_executable(lobsim_export_lobster apps/export_lobster_main.cpp)
-target_link_libraries(lobsim_export_lobster PRIVATE orderlog replay lobsim_options)
+target_link_libraries(lobsim_export_lobster PRIVATE lobster_export lobsim_options)
 
 enable_testing()
 add_subdirectory(viz)
@@ -268,6 +272,7 @@ add_executable(sim_tests
   tests/unit/sim_mm_integration_test.cpp
   tests/unit/sim_integration_test.cpp
   tests/unit/sim_metrics_test.cpp
+  tests/unit/sim_calibrated_flow_test.cpp
   tests/determinism.cpp
   tests/replay.cpp)
 target_include_directories(sim_tests PRIVATE tests)
@@ -288,6 +293,74 @@ add_executable(replay_tests tests/unit/lobster_parse_test.cpp tests/unit/lobster
 target_link_libraries(replay_tests PRIVATE replay lobsim_options nlohmann_json::nlohmann_json GTest::gtest_main)
 target_compile_definitions(replay_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 gtest_discover_tests(replay_tests)
+
+# The calibration file reader/writer (upgrade 3).
+add_library(calibfile STATIC src/calib/calibration.cpp)
+target_include_directories(calibfile PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(calibfile PUBLIC cxx_std_20)
+target_link_libraries(calibfile PUBLIC nlohmann_json::nlohmann_json PRIVATE lobsim_options)
+
+add_executable(calib_tests tests/unit/calib_file_test.cpp)
+target_link_libraries(calib_tests PRIVATE calibfile lobsim_options GTest::gtest_main)
+target_compile_definitions(calib_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+gtest_discover_tests(calib_tests)
+
+# The estimator (upgrade 3, C1): a replay observer that measures a LOBSTER day into a calibration
+# file, and lobsim_calibrate. The commit it was built from is regenerated at every build.
+find_package(Git QUIET)
+add_custom_target(calib_git_commit
+  COMMAND ${CMAKE_COMMAND} -DGIT=${GIT_EXECUTABLE} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/generated/calib_git_commit.hpp
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/git_commit.cmake
+  BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/generated/calib_git_commit.hpp
+  VERBATIM)
+# SHA-256 of the input files: the estimator writes it, validate compares it.
+add_library(calibsha STATIC src/calib/sha256.cpp)
+target_include_directories(calibsha PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(calibsha PUBLIC cxx_std_20)
+target_link_libraries(calibsha PRIVATE lobsim_options)
+add_library(calib STATIC src/calib/estimator.cpp src/calib/estimator_stats.cpp src/calib/estimator_report.cpp
+  src/calib/build_commit.cpp src/calib/recovery.cpp)
+add_dependencies(calib calib_git_commit)
+target_include_directories(calib PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+target_link_libraries(calib PUBLIC replay lob calibfile calibsha PRIVATE lobsim_options)
+
+add_executable(lobsim_calibrate apps/calibrate_main.cpp apps/calibrate_compare.cpp apps/calibrate_validate.cpp)
+target_include_directories(lobsim_calibrate PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
+target_link_libraries(lobsim_calibrate PRIVATE calib calibvalidate lobsim_options)
+target_compile_definitions(lobsim_calibrate PRIVATE LOBSIM_PLOT_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/tools/plot_calibration.py")
+
+add_executable(calib_estimator_tests tests/unit/calib_estimator_test.cpp tests/unit/replay_observer_test.cpp
+  tests/unit/calib_recovery_test.cpp)
+target_link_libraries(calib_estimator_tests PRIVATE calib lobsim_options GTest::gtest_main)
+target_compile_definitions(calib_estimator_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+gtest_discover_tests(calib_estimator_tests)
+
+# Parameter recovery, CI version (upgrade 3, C3): 20 minutes of the hand-made truth, simulated,
+# exported unfiltered, estimated and compared with the truth at twice the tolerances.
+add_test(NAME calibration_recovery
+  COMMAND ${CMAKE_COMMAND}
+    -DRUN=$<TARGET_FILE:lobsim_run> -DEXPORT=$<TARGET_FILE:lobsim_export_lobster>
+    -DCALIBRATE=$<TARGET_FILE:lobsim_calibrate>
+    -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/configs/calibrated.json
+    -DTRUTH=${CMAKE_CURRENT_SOURCE_DIR}/calibration/recovery_truth.json
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/calibration_recovery
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/calibration_recovery.cmake)
+# The committed truth must be what tools/make_recovery_truth.py writes.
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME recovery_truth_up_to_date
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_recovery_truth.py --check
+      --out ${CMAKE_CURRENT_SOURCE_DIR}/calibration/recovery_truth.json)
+endif()
+
+# lobsim_calibrate estimate on a hand-written fixture: exit codes 0, 1 and 3, and a file that loads.
+add_test(NAME calibrate_cli
+  COMMAND ${CMAKE_COMMAND}
+    -DCALIBRATE=$<TARGET_FILE:lobsim_calibrate>
+    -DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calib/km_example
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/calibrate_cli
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/calibrate_cli.cmake)
 
 # Closed loop (upgrade 2, R4): a 60 s simulator run exported to LOBSTER files and replayed. Unfiltered:
 # strict mode must be exact on every row at depth 10. Filtered to the top-10 window: resync mode
@@ -311,6 +384,15 @@ add_test(NAME lobster_like_fake_day
     -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/configs/default.json
     -DOUT=${CMAKE_CURRENT_BINARY_DIR}/lobster_like_fake_day
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/lobster_like.cmake)
+# Calibrated background flow (upgrade 3, C2): a hand-made calibration drives the whole market, the run is
+# exported and replayed clean, and the message rates are near the configured ones.
+add_test(NAME calibrated_flow_closed_loop
+  COMMAND ${CMAKE_COMMAND}
+    -DRUN=$<TARGET_FILE:lobsim_run> -DEXPORT=$<TARGET_FILE:lobsim_export_lobster>
+    -DLOBSTER=$<TARGET_FILE:lobsim_lobster>
+    -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calib/flow_small_run.json
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/calibrated_flow_closed_loop
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/calibrated_flow_closed_loop.cmake)
 add_test(NAME lobster_export_fixture
   COMMAND ${CMAKE_COMMAND}
     -DEXPORT=$<TARGET_FILE:lobsim_export_lobster> -DLOBSTER=$<TARGET_FILE:lobsim_lobster>
@@ -402,6 +484,54 @@ add_test(NAME lobsim_bench_smoke COMMAND lobsim_bench --messages 20000 --ref-mes
 
 add_executable(micro_bench bench/micro_bench.cpp)
 target_link_libraries(micro_bench PRIVATE lob lobsim_options benchmark::benchmark_main)
+
+# The market fingerprint (upgrade 3, C4): one statistics module for LOBSTER data and exported simulations.
+add_library(fingerprint STATIC src/calib/fingerprint.cpp src/calib/fingerprint_stats.cpp)
+target_include_directories(fingerprint PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(fingerprint PUBLIC replay lob calibfile nlohmann_json::nlohmann_json PRIVATE lobsim_options)
+add_executable(lobsim_fingerprint apps/fingerprint_main.cpp)
+target_link_libraries(lobsim_fingerprint PRIVATE fingerprint lobsim_options)
+add_test(NAME lobster_price_scale
+  COMMAND ${CMAKE_COMMAND}
+    -DEXPORT=$<TARGET_FILE:lobsim_export_lobster>
+    -DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/lobster_export
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/lobster_price_scale
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/lobster_price_scale.cmake)
+add_executable(fingerprint_tests tests/unit/fingerprint_test.cpp)
+target_link_libraries(fingerprint_tests PRIVATE fingerprint lobsim_options GTest::gtest_main)
+target_compile_definitions(fingerprint_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+gtest_discover_tests(fingerprint_tests)
+
+# Out-of-sample validation (upgrade 3, C5): `lobsim_calibrate validate`. The estimator is injected (calib::EstimateFn), so
+# the library does not link it; the command line does.
+add_library(calibvalidate STATIC src/calib/validate.cpp src/calib/validate_report.cpp)
+target_include_directories(calibvalidate PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+find_package(Threads REQUIRED)
+target_link_libraries(calibvalidate PUBLIC fingerprint lobster_export sim calibfile calibsha Threads::Threads PRIVATE lobsim_options)
+add_executable(calib_validate_tests tests/unit/calib_validate_test.cpp)
+target_link_libraries(calib_validate_tests PRIVATE calibvalidate calib lobsim_options GTest::gtest_main)
+target_compile_definitions(calib_validate_tests PRIVATE LOBSIM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+gtest_discover_tests(calib_validate_tests)
+add_test(NAME calibrate_validate_e2e
+  COMMAND ${CMAKE_COMMAND}
+    -DRUN=$<TARGET_FILE:lobsim_run> -DEXPORT=$<TARGET_FILE:lobsim_export_lobster>
+    -DCALIBRATE=$<TARGET_FILE:lobsim_calibrate>
+    -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calib/noise_only_day.json
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/calibrate_validate_e2e
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/calibrate_validate_e2e.cmake)
+add_test(NAME real_data_calibrate_script
+  COMMAND ${CMAKE_COMMAND}
+    -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_real_data.sh -DLOBSTER=$<TARGET_FILE:lobsim_lobster>
+    -DRUN=$<TARGET_FILE:lobsim_run> -DEXPORT=$<TARGET_FILE:lobsim_export_lobster>
+    -DCALIBRATE=$<TARGET_FILE:lobsim_calibrate>
+    -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calib/noise_only_day.json
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/real_data_calibrate_script
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_real_data_calibrate.cmake)
+add_test(NAME real_data_calibrate_guards
+  COMMAND ${CMAKE_COMMAND}
+    -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_real_data.sh
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/real_data_calibrate_guards
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_real_data_guards.cmake)
 
 # Binary market-data feed (upgrade 6, FEED.md): the ITCH 5.0 tests run inside lob_tests.
 target_sources(lob_tests PRIVATE tests/unit/feed_itch_test.cpp tests/unit/feed_encoder_test.cpp

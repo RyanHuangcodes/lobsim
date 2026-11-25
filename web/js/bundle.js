@@ -83,10 +83,17 @@ export function loadBundle(metaObj, arrayBuffer) {
     throw new Error("bundle: meta.series is missing or not an array");
   }
 
-  const views = {};
+  // A null-prototype map, so no series name (such as "__proto__") can reach Object.prototype.
+  const views = Object.create(null);
   for (const s of metaObj.series) {
-    const Ctor = TYPE_VIEWS[s.type];
+    const Ctor = Object.hasOwn(TYPE_VIEWS, s.type) ? TYPE_VIEWS[s.type] : undefined;
     if (!Ctor) throw new Error(`bundle: series ${s.name} has unknown type ${s.type}`);
+    if (typeof s.name !== "string" || s.name in views) {
+      throw new Error(`bundle: series name ${s.name} is missing or repeated`);
+    }
+    if (!Number.isSafeInteger(s.offset) || !Number.isSafeInteger(s.count) || s.offset < 0 || s.count < 0) {
+      throw new Error(`bundle: series ${s.name} has an invalid offset or count`);
+    }
     const bytesPer = Ctor.BYTES_PER_ELEMENT;
     const end = s.offset + s.count * bytesPer;
     if (s.offset % bytesPer !== 0) {
@@ -100,5 +107,44 @@ export function loadBundle(metaObj, arrayBuffer) {
     views[s.name] = new Ctor(arrayBuffer, s.offset, s.count);
   }
 
+  checkShape(metaObj, views);
   return { meta: metaObj, views, series: metaObj.series };
+}
+
+// The largest heatmap the dashboard will draw (rows x cols cells; the 1-hour demo has about 90,000).
+export const MAX_HEATMAP_CELLS = 64 * 1024 * 1024;
+export const MAX_LEVELS = 10000;
+
+// Every series the dashboard reads must exist with consistent lengths, and the heatmap's
+// rows x cols must equal its series length, so a crafted meta.json cannot make the page allocate a
+// canvas far larger than data.bin or index past a series (D-903).
+function checkShape(meta, views) {
+  const need = (name, length) => {
+    const v = views[name];
+    if (!v) throw new Error(`bundle: series ${name} is missing`);
+    if (length !== undefined && v.length !== length) {
+      throw new Error(`bundle: series ${name} has ${v.length} values, expected ${length}`);
+    }
+    return v;
+  };
+  const levels = meta.sampling && meta.sampling.levels;
+  if (!Number.isSafeInteger(levels) || levels < 1 || levels > MAX_LEVELS) {
+    throw new Error(`bundle: sampling.levels must be an integer from 1 to ${MAX_LEVELS}`);
+  }
+  const n = need("ladder_time_ns").length;
+  for (const name of ["best_bid", "best_ask", "spread", "mid", "mm_bid", "mm_ask", "mm_inventory", "mm_cash",
+                      "mm_pnl", "fundamental"]) {
+    need(name, n);
+  }
+  for (let d = 0; d < levels; d++) {
+    for (const k of ["bid_px_", "bid_sz_", "ask_px_", "ask_sz_"]) need(k + d, n);
+  }
+  const trades = need("trade_time_ns").length;
+  for (const name of ["trade_price", "trade_qty", "trade_aggressor"]) need(name, trades);
+  const hm = meta.heatmap;
+  if (!hm || !Number.isSafeInteger(hm.rows) || !Number.isSafeInteger(hm.cols) || hm.rows < 1 || hm.cols < 0 ||
+      hm.rows * hm.cols > MAX_HEATMAP_CELLS) {
+    throw new Error(`bundle: heatmap rows and cols must be integers with rows x cols at most ${MAX_HEATMAP_CELLS}`);
+  }
+  need("heatmap", hm.rows * hm.cols);
 }

@@ -1,6 +1,7 @@
 #include "sim/config.hpp"
 
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <stdexcept>
@@ -85,14 +86,40 @@ void check_latency(const LatencySpec& l, const std::string& where) {
   if (l.jitter < 0) bad(where + ".latency_us.jitter", "must be >= 0");
 }
 
+// What the agent needs from the calibration, as a clear error at load time. The same bucket
+// rules as the agent: every spread bucket is reachable (a one-sided or empty local book uses
+// bucket "1"), so every side that can send a limit order needs at least one placement PMF; a bucket without one
+// falls back to the nearest non-empty bucket of the side (D-385).
+void check_calibration_usable(const calib::Calibration& c, const std::string& file) {
+  const std::string w = "background.file (" + file + ")";
+  const double lim_buy = c.rates.limit[calib::kBuy].per_s, lim_sell = c.rates.limit[calib::kSell].per_s;
+  const double agg_buy = c.rates.aggressive[calib::kBuy].per_s, agg_sell = c.rates.aggressive[calib::kSell].per_s;
+  if (!(lim_buy + lim_sell > 0.0) && !(agg_buy + agg_sell > 0.0)) bad(w, "every rate is 0: nothing to generate");
+  if (!std::isfinite(lim_buy + lim_sell) || !std::isfinite(agg_buy + agg_sell)) bad(w, "rates overflow");
+  if (lim_buy + lim_sell > 0.0) {
+    if (c.limit_size.empty()) bad(w, "limit_size is empty but limit orders have a positive rate");
+    for (int s = 0; s < 2; ++s) {
+      if (c.rates.limit[s].per_s <= 0.0) continue;
+      // One empty bucket is fine (the agent draws from the nearest non-empty one); all three are not.
+      bool any = false;
+      for (int b = 0; b < calib::kSpreadBuckets; ++b) any = any || !c.placement[s][b].empty();
+      if (!any)
+        bad(w, std::string("placement[") + (s == calib::kBuy ? "buy" : "sell") +
+                   "]: all three spread buckets are empty but that side has a positive limit rate");
+    }
+  }
+  if (agg_buy + agg_sell > 0.0 && c.aggressive_size.empty())
+    bad(w, "aggressive_size is empty but aggressive orders have a positive rate");
+}
+
 bool positive(double x) { return std::isfinite(x) && x > 0.0; }
 
 }  // namespace
 
-SimConfig parse_config(const json& j) {
+SimConfig parse_config(const json& j, const std::string& base_dir) {
   check_keys(j, "",
              {"seed", "duration_s", "warmup_s", "max_price", "initial_price", "tick_display", "fundamental",
-              "noise_traders", "informed", "mm", "markout_horizons_s", "sample_interval_s"});
+              "noise_traders", "informed", "mm", "background", "markout_horizons_s", "sample_interval_s"});
   SimConfig c;
   {
     // Any unsigned 64-bit seed, as `--seed` accepts.
@@ -166,6 +193,33 @@ SimConfig parse_config(const json& j) {
     mm.latency = latency(m, w);
     c.mm = mm;
   }
+  if (j.contains("background")) {
+    const std::string w = "background";
+    const json& b = j["background"];
+    check_keys(b, w, {"model", "file", "owner_count", "latency_us", "start_price"});
+    const json& model = at(b, w, "model");
+    if (!model.is_string() || model.get<std::string>() != "calibrated") bad(w + ".model", "must be \"calibrated\"");
+    const json& file = at(b, w, "file");
+    if (!file.is_string() || file.get<std::string>().empty()) bad(w + ".file", "must be a non-empty string");
+    BackgroundConfig bg;
+    std::filesystem::path path(file.get<std::string>());
+    if (path.is_relative() && !base_dir.empty()) path = std::filesystem::path(base_dir) / path;
+    bg.file = path.string();
+    if (b.contains("owner_count")) {
+      const std::int64_t n = integer(b, w, "owner_count");
+      if (n < 1 || n > 100'000) bad(w + ".owner_count", "must be between 1 and 100000");
+      bg.owner_count = static_cast<std::uint32_t>(n);
+    }
+    if (b.contains("latency_us")) bg.latency = latency(b, w);
+    if (b.contains("start_price")) bg.start_price = integer(b, w, "start_price");
+    try {
+      bg.calibration = std::make_shared<const calib::Calibration>(calib::load(bg.file));
+    } catch (const std::runtime_error& e) {
+      bad(w + ".file", e.what());
+    }
+    check_calibration_usable(*bg.calibration, bg.file);
+    c.background = std::move(bg);
+  }
   {
     const json& h = at(j, kRoot, "markout_horizons_s");
     if (!h.is_array()) bad("markout_horizons_s", "must be an array of numbers");
@@ -207,6 +261,15 @@ void finalize(SimConfig& c) {
     if (c.informed->size < 1) bad("informed.size", "must be >= 1");
     check_latency(c.informed->latency, "informed");
   }
+  if (c.background) {
+    if (!c.background->calibration) bad("background.file", "the calibration is not loaded");
+    if (c.background->owner_count < 1) bad("background.owner_count", "must be >= 1");
+    check_latency(c.background->latency, "background");
+    if (c.background->start_price && (*c.background->start_price < 1 || *c.background->start_price > c.max_price))
+      bad("background.start_price", "must be in [1, max_price]");
+    if (!c.background->start_price && (c.background->calibration->median_mid_ticks > c.max_price))
+      bad("background.file", "median_mid_ticks is above max_price; set background.start_price");
+  }
   c.requote_interval_ns = 0;
   if (c.mm) {
     if (!positive(c.mm->gamma)) bad("mm.gamma", "must be > 0");
@@ -246,7 +309,7 @@ SimConfig load_config(const std::string& path) {
   } catch (const json::exception& e) {
     throw std::runtime_error("config: " + path + " is not valid JSON: " + e.what());
   }
-  return parse_config(j);
+  return parse_config(j, std::filesystem::path(path).parent_path().string());
 }
 
 json to_json(const SimConfig& c) {
@@ -283,6 +346,13 @@ json to_json(const SimConfig& c) {
                {"maker_fee_ticks", c.mm->maker_fee_ticks},
                {"taker_fee_ticks", c.mm->taker_fee_ticks},
                {"latency_us", latency_json(c.mm->latency)}};
+  if (c.background) {
+    j["background"] = {{"model", "calibrated"},
+                       {"file", c.background->file},
+                       {"owner_count", c.background->owner_count},
+                       {"latency_us", latency_json(c.background->latency)}};
+    if (c.background->start_price) j["background"]["start_price"] = *c.background->start_price;
+  }
   j["markout_horizons_s"] = c.markout_horizons_s;
   j["sample_interval_s"] = c.sample_interval_s;
   return j;

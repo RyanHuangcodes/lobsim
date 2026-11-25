@@ -9,7 +9,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Least privilege at the top level; the deploy job widens its own permissions below.
+# Least privilege at the top level; the deploy job widens its own permissions below. The actions
+# are pinned to commit SHAs (the release in the comment), because this workflow can publish the
+# site; Dependabot keeps the pins current (.github/dependabot.yml).
 permissions:
   contents: read
 
@@ -23,20 +25,22 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Build the site (Release build + 1-hour seed-42 demo run + export + web assets)
         run: bash scripts/build_site.sh
       - name: Configure Pages
-        uses: actions/configure-pages@v6
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - name: Upload the site artifact
-        uses: actions/upload-pages-artifact@v5
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
 
   deploy:
     needs: build
+    # Only main publishes, also for a manual run started from another branch (D-910).
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -48,4 +52,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

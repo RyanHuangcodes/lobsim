@@ -1,0 +1,232 @@
+{
+  "aggressive_size": {
+    "counts": [
+      4,
+      2,
+      1
+    ],
+    "values": [
+      1,
+      2,
+      5
+    ]
+  },
+  "code_commit": "unknown",
+  "date": "2012-06-21",
+  "inputs": [],
+  "levels": 0,
+  "lifetime": {
+    "1-2": {
+      "at_risk": [],
+      "cancelled": 0,
+      "censored_executed": 0,
+      "censored_left_window": 0,
+      "censored_window_end": 0,
+      "events": [],
+      "orders": 0,
+      "survival": [
+        0.7,
+        0.3
+      ],
+      "times_ns": [
+        2000000000,
+        10000000000
+      ]
+    },
+    "3-9": {
+      "at_risk": [],
+      "cancelled": 0,
+      "censored_executed": 0,
+      "censored_left_window": 0,
+      "censored_window_end": 0,
+      "events": [],
+      "orders": 0,
+      "survival": [
+        0.8,
+        0.5
+      ],
+      "times_ns": [
+        5000000000,
+        30000000000
+      ]
+    },
+    "<=0": {
+      "at_risk": [],
+      "cancelled": 0,
+      "censored_executed": 0,
+      "censored_left_window": 0,
+      "censored_window_end": 0,
+      "events": [],
+      "orders": 0,
+      "survival": [
+        0.5,
+        0.2
+      ],
+      "times_ns": [
+        1000000000,
+        5000000000
+      ]
+    },
+    ">=10": {
+      "at_risk": [],
+      "cancelled": 0,
+      "censored_executed": 0,
+      "censored_left_window": 0,
+      "censored_window_end": 0,
+      "events": [],
+      "orders": 0,
+      "survival": [
+        0.9
+      ],
+      "times_ns": [
+        10000000000
+      ]
+    }
+  },
+  "limit_size": {
+    "counts": [
+      5,
+      3,
+      1,
+      1
+    ],
+    "values": [
+      1,
+      2,
+      3,
+      5
+    ]
+  },
+  "median_mid_ticks": 1000,
+  "observed_ns": 60000000000,
+  "placement": {
+    "buy": {
+      "1": {
+        "counts": [
+          6,
+          3,
+          2,
+          1
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3
+        ]
+      },
+      "2": {
+        "counts": [
+          2,
+          4,
+          3,
+          2,
+          1
+        ],
+        "values": [
+          -1,
+          0,
+          1,
+          2,
+          3
+        ]
+      },
+      "3+": {
+        "counts": [
+          1,
+          2,
+          4,
+          4,
+          3,
+          2,
+          1
+        ],
+        "values": [
+          -2,
+          -1,
+          0,
+          1,
+          2,
+          5,
+          8
+        ]
+      }
+    },
+    "sell": {
+      "1": {
+        "counts": [
+          6,
+          3,
+          2,
+          1
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3
+        ]
+      },
+      "2": {
+        "counts": [],
+        "values": []
+      },
+      "3+": {
+        "counts": [
+          1,
+          2,
+          4,
+          4,
+          3,
+          2,
+          1
+        ],
+        "values": [
+          -2,
+          -1,
+          0,
+          1,
+          2,
+          5,
+          8
+        ]
+      }
+    }
+  },
+  "placement_fit": {
+    "buy": null,
+    "sell": null
+  },
+  "pooled_aggressive_size": 0,
+  "pooled_limit_size": 0,
+  "rates": {
+    "aggressive": {
+      "buy": {
+        "count": 0,
+        "per_s": 0.5
+      },
+      "sell": {
+        "count": 0,
+        "per_s": 0.5
+      }
+    },
+    "limit": {
+      "buy": {
+        "count": 0,
+        "per_s": 4.0
+      },
+      "sell": {
+        "count": 0,
+        "per_s": 4.0
+      }
+    }
+  },
+  "report": {},
+  "schema_version": 1,
+  "source": "hand-made",
+  "tick_units": 1,
+  "ticker": "TOY",
+  "window_from_ns": 0,
+  "window_note": "hand-made test fixture",
+  "window_to_ns": 60000000000
+}

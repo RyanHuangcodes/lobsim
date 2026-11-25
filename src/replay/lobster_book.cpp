@@ -8,7 +8,6 @@
 namespace replay {
 
 using detail::fail;
-using detail::split;
 using detail::strip_cr;
 using detail::to_int;
 
@@ -21,8 +20,15 @@ Parsed<BookRow> parse_book_line(std::string_view line, int levels) {
   if (have != want) {
     return fail(std::move(r), "expected " + std::to_string(want) + " fields, found " + std::to_string(have));
   }
-  std::vector<std::string_view> f(want);
-  split(line, f.data(), want);
+  // The fields in line order (exactly `want` of them, counted above): level by level, the ask
+  // price, ask size, bid price and bid size, the same order the errors below are checked in.
+  std::size_t start = 0;
+  const auto next_field = [&]() {
+    const std::size_t comma = line.find(',', start);
+    const std::string_view f = line.substr(start, comma == std::string_view::npos ? std::string_view::npos : comma - start);
+    start = comma == std::string_view::npos ? line.size() : comma + 1;
+    return f;
+  };
   static constexpr const char* kName[4] = {"ask price", "ask size", "bid price", "bid size"};
   BookRow row;
   row.asks.reserve(static_cast<std::size_t>(levels));
@@ -30,7 +36,7 @@ Parsed<BookRow> parse_book_line(std::string_view line, int levels) {
   for (std::size_t lvl = 0; lvl < static_cast<std::size_t>(levels); ++lvl) {
     std::int64_t v[4];
     for (std::size_t k = 0; k < 4; ++k) {
-      const auto x = to_int(f[4 * lvl + k]);
+      const auto x = to_int(next_field());
       if (!x) {
         return fail(std::move(r), std::string(kName[k]) + " of level " + std::to_string(lvl + 1) + ": not an integer");
       }
@@ -80,6 +86,46 @@ std::optional<int> levels_from_filename(std::string_view path) {
   const auto [p, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), levels);
   if (ec != std::errc{} || p != digits.data() + digits.size() || levels < 1) return std::nullopt;
   return levels;
+}
+
+std::optional<LobsterFileName> parse_lobster_filename(std::string_view path) {
+  const std::size_t slash = path.rfind('/');
+  std::string_view name = slash == std::string_view::npos ? path : path.substr(slash + 1);
+  constexpr std::string_view ext = ".csv";
+  if (name.size() <= ext.size() || name.substr(name.size() - ext.size()) != ext) return std::nullopt;
+  name.remove_suffix(ext.size());
+  // From the right: L, KIND, END, START, DATE; what is left is the ticker.
+  std::string_view parts[5];
+  for (std::string_view& part : parts) {
+    const std::size_t us = name.rfind('_');
+    if (us == std::string_view::npos) return std::nullopt;
+    part = name.substr(us + 1);
+    name = name.substr(0, us);
+  }
+  if (name.empty()) return std::nullopt;
+  const auto digits = [](std::string_view s) {
+    if (s.empty()) return false;
+    for (char c : s) {
+      if (c < '0' || c > '9') return false;
+    }
+    return true;
+  };
+  const std::string_view l = parts[0], kind = parts[1], end = parts[2], start = parts[3], date = parts[4];
+  if (kind != "message" && kind != "orderbook") return std::nullopt;
+  if (!digits(l) || !digits(end) || !digits(start)) return std::nullopt;
+  if (date.size() != 10 || date[4] != '-' || date[7] != '-' || !digits(date.substr(0, 4)) ||
+      !digits(date.substr(5, 2)) || !digits(date.substr(8, 2))) {
+    return std::nullopt;
+  }
+  LobsterFileName f;
+  f.ticker = std::string(name);
+  f.date = std::string(date);
+  f.kind = std::string(kind);
+  const auto [p1, e1] = std::from_chars(start.data(), start.data() + start.size(), f.start_ms);
+  const auto [p2, e2] = std::from_chars(end.data(), end.data() + end.size(), f.end_ms);
+  const auto [p3, e3] = std::from_chars(l.data(), l.data() + l.size(), f.levels);
+  if (e1 != std::errc{} || e2 != std::errc{} || e3 != std::errc{} || f.levels < 1) return std::nullopt;
+  return f;
 }
 
 std::size_t count_fields(std::string_view line) {

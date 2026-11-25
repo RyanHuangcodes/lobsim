@@ -46,17 +46,27 @@ bool parse_small(std::string_view token, int max, T& out) {
 }
 
 // Splits on single spaces. Empty tokens (two spaces, a leading or trailing space) are
-// kept, and fail later when parsed as integers.
-std::vector<std::string_view> split(std::string_view line) {
-  std::vector<std::string_view> tokens;
+// kept, and fail later when parsed as integers. A request line has at most 11 tokens, so the
+// first 11 are stored and the rest only counted: size() is the full count, which every check
+// compares with 11 or fewer, and no allocation happens per line (D-913).
+struct Tokens {
+  static constexpr std::size_t kMax = 11;
+  std::array<std::string_view, kMax> t;
+  std::size_t n = 0;
+  std::size_t size() const noexcept { return n; }
+  std::string_view operator[](std::size_t i) const noexcept { return t[i]; }
+};
+
+Tokens split(std::string_view line) {
+  Tokens tokens;
   std::size_t start = 0;
   for (;;) {
     const std::size_t space = line.find(' ', start);
-    if (space == std::string_view::npos) {
-      tokens.push_back(line.substr(start));
-      return tokens;
-    }
-    tokens.push_back(line.substr(start, space - start));
+    const std::string_view token =
+        space == std::string_view::npos ? line.substr(start) : line.substr(start, space - start);
+    if (tokens.n < Tokens::kMax) tokens.t[tokens.n] = token;
+    ++tokens.n;
+    if (space == std::string_view::npos) return tokens;
     start = space + 1;
   }
 }
@@ -114,7 +124,7 @@ std::string format_request(TimeNs time, const lob::Request& request) {
 }
 
 std::optional<std::pair<TimeNs, lob::Request>> parse_request(std::string_view line) {
-  const std::vector<std::string_view> t = split(line);
+  const Tokens t = split(line);
   if (t.size() < 2 || t[1].size() != 1) return std::nullopt;
   TimeNs time = 0;
   if (!parse(t[0], time) || time < 0) return std::nullopt;

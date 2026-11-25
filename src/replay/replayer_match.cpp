@@ -98,6 +98,7 @@ void Replayer::check_burst(const Entry& first, Source& source) {
     burst.push_back(next);
   }
   burst_left_ = burst.size() - 1;
+  burst_size_ = burst.size();
   MatchingStats& stats = summary_.matching;
   ++stats.bursts;
   stats.burst_messages += burst.size();
@@ -203,8 +204,8 @@ void Replayer::check_burst(const Entry& first, Source& source) {
   for (const BurstFill& f : data) x.data.push_back(to_string(f));
   for (const BurstFill& f : predicted) x.predicted.push_back(to_string(f));
   // recent_ ends with the burst's first line.
-  const std::size_t before = recent_.size() - 1;
-  for (std::size_t i = before > kContext ? before - kContext : 0; i < before; ++i) x.before.push_back(recent_[i]);
+  const std::size_t before = recent_size() - 1;
+  for (std::size_t i = before > kContext ? before - kContext : 0; i < before; ++i) x.before.push_back(recent_line(i));
   for (std::size_t i = 0; i < kContext; ++i) {
     const Entry* e = source.peek(burst.size() - 1 + i);
     if (e == nullptr) break;

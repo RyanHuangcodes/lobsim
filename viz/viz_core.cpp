@@ -163,33 +163,38 @@ std::vector<CsvTrade> read_trades_csv(const std::filesystem::path& p) {
   return out;
 }
 
-// All resting sizes per integer tick on both sides of the book: price -> (size, side).
-struct RestingSnapshot {
-  // price -> total resting size (a price is on exactly one side at a time)
-  std::map<lob::Price, double> sizes;
-};
-
-RestingSnapshot full_resting(const lob::OrderBook& book) {
-  RestingSnapshot s;
-  for (const lob::LevelView& lv : book.depth(lob::Side::Buy, kFullDepth)) s.sizes[lv.price] = static_cast<double>(lv.total_qty);
-  for (const lob::LevelView& lv : book.depth(lob::Side::Sell, kFullDepth)) s.sizes[lv.price] = static_cast<double>(lv.total_qty);
-  return s;
+// Every resting level of both sides as (price, total size), written into `out` (cleared first).
+// A price is on one side only, because the book never crosses, so each price appears once. The
+// heatmap adds each pair into its own cell, so the order of the pairs does not change any sum.
+using Snapshot = std::vector<std::pair<lob::Price, double>>;
+void full_resting(const lob::OrderBook& book, std::vector<lob::LevelView>& scratch, Snapshot& out) {
+  out.clear();
+  for (const lob::Side side : {lob::Side::Buy, lob::Side::Sell}) {
+    book.depth(side, kFullDepth, scratch);
+    for (const lob::LevelView& lv : scratch) out.emplace_back(lv.price, static_cast<double>(lv.total_qty));
+  }
 }
 
 // MM quote prices from the rebuilt book: highest resting buy / lowest resting sell owned by mm.
+// Every MM order enters the book through an Ack, so the ids acked to the MM cover all of its
+// resting orders; ids whose order is gone are dropped as they are found (D-908).
 struct MmQuotes {
   std::optional<lob::Price> bid;
   std::optional<lob::Price> ask;
 };
-MmQuotes mm_quotes(const lob::OrderBook& book, std::optional<lob::OwnerId> mm_owner) {
+MmQuotes mm_quotes(const lob::OrderBook& book, std::vector<lob::OrderId>& mm_ids) {
   MmQuotes q;
-  if (!mm_owner) return q;
-  for (const lob::LevelView& lv : book.depth(lob::Side::Buy, kFullDepth))
-    for (const lob::OrderView& o : book.level_orders(lob::Side::Buy, lv.price))
-      if (o.owner == *mm_owner) q.bid = q.bid ? std::max(*q.bid, o.price) : o.price;
-  for (const lob::LevelView& lv : book.depth(lob::Side::Sell, kFullDepth))
-    for (const lob::OrderView& o : book.level_orders(lob::Side::Sell, lv.price))
-      if (o.owner == *mm_owner) q.ask = q.ask ? std::min(*q.ask, o.price) : o.price;
+  for (std::size_t i = 0; i < mm_ids.size();) {
+    const std::optional<lob::OrderView> o = book.order(mm_ids[i]);
+    if (!o) {
+      mm_ids[i] = mm_ids.back();
+      mm_ids.pop_back();
+      continue;
+    }
+    if (o->side == lob::Side::Buy) q.bid = q.bid ? std::max(*q.bid, o->price) : o->price;
+    else q.ask = q.ask ? std::min(*q.ask, o->price) : o->price;
+    ++i;
+  }
   return q;
 }
 
@@ -263,6 +268,7 @@ double rel_diff(double a, double b) {
 struct RebuildResult {
   std::uint64_t event_hash{0};
   double mm_pnl_final{0.0};
+  bool any{false};  // the log has at least one request
   TimeNs first_time{0};
   TimeNs last_time{0};
   lob::Price min_bid_over_run{0};
@@ -341,7 +347,7 @@ class HeatmapAccumulator {
   HeatmapAccumulator(TimeNs t0, TimeNs dt) : t0_(t0), dt_(dt) {}
 
   // Account the book state `snap` as in force over [from, to). Splits across column boundaries.
-  void account(TimeNs from, TimeNs to, const std::map<lob::Price, double>& snap) {
+  void account(TimeNs from, TimeNs to, const Snapshot& snap) {
     if (to <= from) return;
     TimeNs cursor = from;
     while (cursor < to) {
@@ -375,10 +381,66 @@ class HeatmapAccumulator {
   std::vector<std::map<lob::Price, double>> columns_;
 };
 
-// Replay once, producing both the ladder samples and the heatmap columns for the given steps.
+// Row range = [min_bid - pad, max_ask + pad] over integer ticks, at least one row. Checked
+// arithmetic: prices come from the log and pad from the command line.
+void row_range(const RebuildResult& rr, std::int64_t pad_ticks, lob::Price& lo, lob::Price& hi) {
+  const auto sub = [](lob::Price a, std::int64_t b) {
+    lob::Price r;
+    if (__builtin_sub_overflow(a, b, &r)) fail("the heatmap price range overflows");
+    return r;
+  };
+  const auto add = [](lob::Price a, std::int64_t b) {
+    lob::Price r;
+    if (__builtin_add_overflow(a, b, &r)) fail("the heatmap price range overflows");
+    return r;
+  };
+  lo = rr.saw_bid ? sub(rr.min_bid_over_run, pad_ticks) : 0;
+  hi = rr.saw_ask ? add(rr.max_ask_over_run, pad_ticks) : 0;
+  if (!rr.saw_bid && rr.saw_ask) lo = sub(rr.max_ask_over_run, pad_ticks);
+  if (!rr.saw_ask && rr.saw_bid) hi = add(rr.min_bid_over_run, pad_ticks);
+  if (lo < 1) lo = 1;
+  if (hi < lo) hi = lo;
+}
+
+// Saturating arithmetic for size estimates: a wrapped estimate could look small.
+std::uint64_t sat_mul(std::uint64_t a, std::uint64_t b) {
+  std::uint64_t r;
+  return __builtin_mul_overflow(a, b, &r) ? std::numeric_limits<std::uint64_t>::max() : r;
+}
+std::uint64_t sat_add(std::uint64_t a, std::uint64_t b) {
+  std::uint64_t r;
+  return __builtin_add_overflow(a, b, &r) ? std::numeric_limits<std::uint64_t>::max() : r;
+}
+
+// The number of ladder samples and heatmap columns a sampling pass makes with these steps, from
+// the time range alone (D-909). Ladder samples are at first + k * dt for every k with
+// first + k * dt <= last. The heatmap covers [first, last), so its last column holds last - 1.
+std::uint64_t ladder_count(const RebuildResult& rr, TimeNs dt) {
+  return rr.any ? static_cast<std::uint64_t>((rr.last_time - rr.first_time) / dt) + 1 : 0;
+}
+std::uint64_t heatmap_cols(const RebuildResult& rr, TimeNs dt) {
+  return rr.any && rr.last_time > rr.first_time ? static_cast<std::uint64_t>((rr.last_time - 1 - rr.first_time) / dt) + 1 : 0;
+}
+
+// estimate_bytes for the given counts.
+std::uint64_t estimate_bytes(std::uint64_t L, std::uint64_t rows, std::uint64_t cols, std::uint64_t trades,
+                             std::uint64_t levels) {
+  // Rough but safe upper bound of data.bin: ladder arrays, trade arrays, heatmap.
+  std::uint64_t bytes = sat_mul(L, 8);                    // time f64
+  bytes = sat_add(bytes, sat_mul(L, 8 * 4));              // best bid/ask i32 (padded), mid f64, spread i32
+  bytes = sat_add(bytes, sat_mul(sat_mul(L, levels), 16)); // ladder px/sz both sides i32
+  bytes = sat_add(bytes, sat_mul(L, 8 * 3));              // mm cash/pnl f64 + inventory i32 + fundamental f64
+  bytes = sat_add(bytes, sat_mul(L, 4 * 2));              // mm quote bid/ask i32
+  bytes = sat_add(bytes, sat_mul(trades, 8 + 4 + 4 + 4)); // trade time f64, price i32, qty i32, side i32
+  bytes = sat_add(bytes, sat_mul(rows, cols));            // heatmap u8
+  return sat_add(bytes, 4096);                            // slack for alignment padding
+}
+
+// Replay once. Always fills `rr` (hash, trades, MM PnL, time range, price extents). With `sample`,
+// also produces the ladder samples and the heatmap columns for the given steps.
 void rebuild_and_sample(const std::filesystem::path& run_dir, const Config& cfg,
                         const std::map<TimeNs, double>& fundamental, TimeNs ladder_dt, TimeNs heatmap_dt,
-                        std::int64_t pad_ticks, std::size_t levels, RebuildResult& rr, SampleOutput& so) {
+                        std::int64_t pad_ticks, std::size_t levels, bool sample, RebuildResult& rr, SampleOutput& so) {
   std::ifstream in(run_dir / "orders.log", std::ios::binary);
   if (!in) fail("cannot open " + (run_dir / "orders.log").string());
 
@@ -406,8 +468,10 @@ void rebuild_and_sample(const std::filesystem::path& run_dir, const Config& cfg,
 
   // Heatmap: the book state in force since the last change, accumulated per column.
   std::optional<HeatmapAccumulator> heat;
-  TimeNs state_since = 0;                  // time the current book state took effect
-  std::map<lob::Price, double> cur_state;  // current resting sizes per price
+  TimeNs state_since = 0;  // time the current book state took effect
+  Snapshot cur_state;      // current resting sizes per price
+  std::vector<lob::LevelView> scratch;
+  std::vector<lob::OrderId> mm_ids;  // ids acked to the market maker (see mm_quotes)
 
   auto current_mid = [&]() -> std::optional<double> {
     const auto bb = book.best_bid();
@@ -435,7 +499,7 @@ void rebuild_and_sample(const std::filesystem::path& run_dir, const Config& cfg,
       s.mid = static_cast<double>(*s.best_bid + *s.best_ask) / 2.0;
       s.spread = *s.best_ask - *s.best_bid;
     }
-    const MmQuotes q = mm_quotes(book, cfg.mm_owner);
+    const MmQuotes q = have_mm ? mm_quotes(book, mm_ids) : MmQuotes{};
     s.mm_bid = q.bid;
     s.mm_ask = q.ask;
     s.mm_inventory = inventory;
@@ -457,10 +521,11 @@ void rebuild_and_sample(const std::filesystem::path& run_dir, const Config& cfg,
     const TimeNs t = logged->time;
     if (!have_first) {
       have_first = true;
+      rr.any = true;
       rr.first_time = t;
       next_ladder = t;
-      ladder_open = true;
-      heat.emplace(t, heatmap_dt);
+      ladder_open = sample;
+      if (sample) heat.emplace(t, heatmap_dt);
       state_since = t;
       cur_state.clear();  // empty book before the first request
     }
@@ -482,6 +547,7 @@ void rebuild_and_sample(const std::filesystem::path& run_dir, const Config& cfg,
 
     // MM accounting + trade capture.
     for (const lob::Event& e : events) {
+      if (const auto* a = std::get_if<lob::Ack>(&e); a != nullptr && have_mm && a->owner == mm) mm_ids.push_back(a->order_id);
       if (const auto* tr = std::get_if<lob::Trade>(&e)) {
         rr.trades.push_back(TradeSample{t, tr->price, tr->qty, tr->aggressor_side});
         if (have_mm) {
@@ -514,12 +580,14 @@ void rebuild_and_sample(const std::filesystem::path& run_dir, const Config& cfg,
     rr.last_time = t;
 
     // The book changed: snapshot the new state as in force from t onward.
-    cur_state = full_resting(book).sizes;
+    if (sample) full_resting(book, scratch, cur_state);
     state_since = t;
   }
 
   rr.event_hash = hasher.value();
   rr.mm_pnl_final = have_mm ? static_cast<double>(cash) + static_cast<double>(inventory) * last_mid.value_or(0.0) - fees : 0.0;
+
+  if (!sample) return;
 
   // Emit a final ladder sample at last_time (so the series spans the full run) and close out
   // the heatmap. The final book state contributes nothing (zero width) at last_time.
@@ -532,15 +600,9 @@ void rebuild_and_sample(const std::filesystem::path& run_dir, const Config& cfg,
   }
   so.heatmap_t0 = rr.first_time;
 
-  // Row range = [min_bid - pad, max_ask + pad] over integer ticks.
-  lob::Price lo = rr.saw_bid ? rr.min_bid_over_run - pad_ticks : 0;
-  lob::Price hi = rr.saw_ask ? rr.max_ask_over_run + pad_ticks : 0;
-  if (!rr.saw_bid && rr.saw_ask) lo = rr.max_ask_over_run - pad_ticks;
-  if (!rr.saw_ask && rr.saw_bid) hi = rr.min_bid_over_run + pad_ticks;
-  if (lo < 1) lo = 1;
-  if (hi < lo) hi = lo;
-  so.row_lo = lo;
-  so.row_hi = hi;
+  row_range(rr, pad_ticks, so.row_lo, so.row_hi);
+  const lob::Price lo = so.row_lo;
+  const lob::Price hi = so.row_hi;
 
   // v_max = max time-weighted mean over cells inside the row range; clipped share = fraction of
   // total resting (time-weighted) mass outside the row range.
@@ -558,23 +620,6 @@ void rebuild_and_sample(const std::filesystem::path& run_dir, const Config& cfg,
   so.v_max = vmax;
   const double total_mass = in_mass + out_mass;
   so.clipped_share = total_mass > 0.0 ? out_mass / total_mass : 0.0;
-}
-
-std::size_t estimate_bytes(const SampleOutput& so, const RebuildResult& rr, std::size_t levels) {
-  // Rough but safe upper bound of data.bin: ladder arrays, trade arrays, heatmap.
-  const std::size_t L = so.ladder.size();
-  const std::size_t rows = static_cast<std::size_t>(so.row_hi - so.row_lo + 1);
-  const std::size_t cols = so.heatmap_cols.size();
-  std::size_t bytes = 0;
-  bytes += L * 8;                 // time f64
-  bytes += L * 8 * 4;            // best bid/ask i32 (padded), mid f64, spread i32 -> be generous
-  bytes += L * levels * 4 * 4;  // ladder px/sz both sides i32
-  bytes += L * 8 * 3;            // mm cash/pnl f64 + inventory i32 + fundamental f64
-  bytes += L * 4 * 2;            // mm quote bid/ask i32
-  bytes += rr.trades.size() * (8 + 4 + 4 + 4);  // trade time f64, price i32, qty i32, side i32
-  bytes += rows * cols;          // heatmap u8
-  bytes += 4096;                 // slack for alignment padding
-  return bytes;
 }
 
 // Append a column array of int64 ticks as checked Int32, with missing-> kMissingI32.
@@ -824,14 +869,16 @@ int run_export(const ExportOptions& opts) {
     const Config cfg = read_config(summary);
     const std::map<TimeNs, double> fundamental = read_fundamental(run_dir / "bbo.csv");
 
-    // Pass 1: rebuild + verify hash and PnL with the requested steps (steps do not affect the
-    // hash or the PnL, only the samples/heatmap resolution).
+    // Pass 1: rebuild and verify the hash, the trades and the PnL, without sampling (the steps do
+    // not affect them). Its cost is bounded by the size of orders.log.
     TimeNs ladder_dt = opts.ladder_dt_ns;
     TimeNs heatmap_dt = opts.heatmap_dt_ns;
+    if (ladder_dt <= 0 || heatmap_dt <= 0) fail("the sampling steps must be positive");
 
     RebuildResult rr;
     SampleOutput so;
-    rebuild_and_sample(run_dir, cfg, fundamental, ladder_dt, heatmap_dt, opts.heatmap_pad_ticks, opts.levels, rr, so);
+    rebuild_and_sample(run_dir, cfg, fundamental, ladder_dt, heatmap_dt, opts.heatmap_pad_ticks, opts.levels,
+                       false, rr, so);
 
     // Verify engine hash.
     char hexbuf[17];
@@ -875,19 +922,46 @@ int run_export(const ExportOptions& opts) {
       }
     }
 
-    // Budget fit: double heatmap-dt first, then ladder-dt, re-sampling each time.
+    // Budget fit: double heatmap-dt first, then ladder-dt. The sample and column counts follow
+    // from the time range alone, so the doubling is decided by arithmetic, not by re-sampling,
+    // and the one sampling pass below never makes more samples than the budget allows (D-909).
+    lob::Price row_lo = 0, row_hi = 0;
+    row_range(rr, opts.heatmap_pad_ticks, row_lo, row_hi);
+    const auto rows = static_cast<std::uint64_t>(row_hi - row_lo) + 1;
+    const auto budget = static_cast<std::uint64_t>(opts.budget_bytes);
+    const auto estimate = [&] {
+      return estimate_bytes(ladder_count(rr, ladder_dt), rows, heatmap_cols(rr, heatmap_dt), rr.trades.size(),
+                            opts.levels);
+    };
+    // Every time the sampling pass forms (first + k * dt, at most last + dt) must fit in 64 bits,
+    // and every time in the bundle must be below 2^53 (BUNDLE.md); check both before sampling.
+    if (rr.any && rr.last_time >= (std::int64_t{1} << 53)) {
+      fail("time " + std::to_string(rr.last_time) + " is not exactly representable as Float64 (>= 2^53)");
+    }
+    const TimeNs max_dt = std::numeric_limits<TimeNs>::max() - std::max<TimeNs>(rr.last_time, 0);
+    if (ladder_dt > max_dt || heatmap_dt > max_dt) fail("a sampling step is longer than the time range allows");
+    const auto twice = [max_dt](TimeNs& dt) {
+      if (dt > max_dt / 2) fail("the run cannot fit the size budget");
+      dt *= 2;
+    };
     for (int guard = 0; guard < 64; ++guard) {
-      const std::size_t est = estimate_bytes(so, rr, opts.levels);
-      if (static_cast<std::int64_t>(est) <= opts.budget_bytes) break;
+      const std::uint64_t est = estimate();
+      if (est <= budget) break;
       // Prefer coarser heatmap; alternate to ladder only after heatmap is clearly dominant.
-      const std::size_t rows = static_cast<std::size_t>(so.row_hi - so.row_lo + 1);
-      const std::size_t heatmap_bytes = rows * so.heatmap_cols.size();
-      if (heatmap_bytes * 2 >= est) {
-        heatmap_dt *= 2;
-      } else {
-        ladder_dt *= 2;
-      }
-      rebuild_and_sample(run_dir, cfg, fundamental, ladder_dt, heatmap_dt, opts.heatmap_pad_ticks, opts.levels, rr, so);
+      const std::uint64_t heatmap_bytes = sat_mul(rows, heatmap_cols(rr, heatmap_dt));
+      if (sat_mul(heatmap_bytes, 2) >= est) twice(heatmap_dt);
+      else twice(ladder_dt);
+    }
+    if (estimate() > budget) {
+      fail("the run cannot fit the size budget of " + std::to_string(opts.budget_bytes) + " bytes");
+    }
+    const std::uint64_t want_ladder = ladder_count(rr, ladder_dt), want_cols = heatmap_cols(rr, heatmap_dt);
+    rebuild_and_sample(run_dir, cfg, fundamental, ladder_dt, heatmap_dt, opts.heatmap_pad_ticks, opts.levels, true,
+                       rr, so);
+    if (so.ladder.size() != want_ladder || so.heatmap_cols.size() != want_cols) {
+      fail("internal error: the sampling pass made " + std::to_string(so.ladder.size()) + " ladder samples and " +
+           std::to_string(so.heatmap_cols.size()) + " heatmap columns, not " + std::to_string(want_ladder) + " and " +
+           std::to_string(want_cols));
     }
 
     return write_bundle(opts, cfg, summary.at("config"), rr, so, ladder_dt, heatmap_dt);

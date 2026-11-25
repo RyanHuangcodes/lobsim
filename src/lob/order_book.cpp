@@ -384,15 +384,21 @@ std::optional<LevelView> OrderBook::best_level(Side side) const {
 
 std::vector<LevelView> OrderBook::depth(Side side, std::size_t n) const {
   std::vector<LevelView> levels;
+  depth(side, n, levels);
+  return levels;
+}
+
+void OrderBook::depth(Side side, std::size_t n, std::vector<LevelView>& out) const {
+  out.clear();
   auto collect = [&](const auto& book_side) {
+    out.reserve(std::min(n, book_side.size()));
     for (const auto& [price, level] : book_side) {
-      if (levels.size() == n) break;
-      levels.push_back(LevelView{price, level.total_qty});
+      if (out.size() == n) break;
+      out.push_back(LevelView{price, level.total_qty});
     }
   };
   if (side == Side::Buy) collect(bids_);
   else collect(asks_);
-  return levels;
 }
 
 std::optional<OrderView> OrderBook::order(OrderId id) const {

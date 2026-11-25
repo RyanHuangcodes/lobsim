@@ -34,6 +34,15 @@ add_test(NAME viz_export_e2e
 # The 5-minute sim can take a minute or two; give it headroom.
 set_tests_properties(viz_export_e2e PROPERTIES TIMEOUT 600)
 
+# Hostile run folders: a far-off time and an extreme price span must fail fast with exit code 2.
+add_test(NAME viz_export_hostile
+         COMMAND ${CMAKE_COMMAND}
+                 -DEXPORT=$<TARGET_FILE:lobsim_viz_export>
+                 -DREPLAY=$<TARGET_FILE:lobsim_replay>
+                 -DOUT=${CMAKE_CURRENT_BINARY_DIR}/viz_hostile
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/viz_hostile.cmake)
+set_tests_properties(viz_export_hostile PROPERTIES TIMEOUT 120)
+
 # JS suite (node --test web/test). Skips cleanly when node is absent: find_program resolves node at
 # configure time, the wrapper prints a SKIP marker and exits 0 when it is missing, and ctest treats
 # that marker (via SKIP_REGULAR_EXPRESSION) as a skip rather than a pass or a failure.

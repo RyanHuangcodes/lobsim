@@ -52,6 +52,11 @@ endif()
 if(EXISTS "${OUT}/guard")
   message(FATAL_ERROR "the refused export created ${OUT}/guard")
 endif()
+execute_process(COMMAND "${EXPORT}" --run "${OUT}/run" --levels ${levels} --out "${OUT}/guard/data/lobster/"
+                RESULT_VARIABLE rc OUTPUT_QUIET ERROR_VARIABLE err)
+if(NOT rc EQUAL 1 OR NOT err MATCHES "refusing" OR EXISTS "${OUT}/guard")
+  message(FATAL_ERROR "a plain export into data/lobster should be refused with exit 1 too (got ${rc}): ${err}")
+endif()
 
 file(READ "${OUT}/a/SYNTHT_injected.json" injected)
 string(JSON want_hidden GET "${injected}" hidden_exec_written)
