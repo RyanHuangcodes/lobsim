@@ -34,6 +34,21 @@ while [ $# -gt 0 ]; do
   esac
   shift 2
 done
+# Numbers go into $(( )) and to the tools: digits only, so no value can run code (bash evaluates
+# command substitutions inside arithmetic). The output folder is cleaned below, so it may hold
+# only what this script writes (D-911).
+for v in "WINDOW=$WINDOW" "SEED=$SEED"; do
+  case ${v#*=} in ''|*[!0-9]*) echo "run_recovery.sh: ${v%%=*} must be a whole number, not '${v#*=}'" >&2; exit 1 ;; esac
+done
+if [ -d "$OUT" ]; then
+  for f in "$OUT"/* "$OUT"/.[!.]*; do
+    [ -e "$f" ] || continue
+    case ${f##*/} in
+      run|run.txt|unfiltered|filtered|unfiltered_L10|*.estimate.txt|*.export.txt) ;;
+      *) echo "run_recovery.sh: $OUT holds $f, which this script did not write; choose another --out" >&2; exit 1 ;;
+    esac
+  done
+fi
 WARMUP=300
 mkdir -p "$OUT"
 rm -rf "$OUT/run" "$OUT/unfiltered" "$OUT/filtered" "$OUT/unfiltered_L10"
