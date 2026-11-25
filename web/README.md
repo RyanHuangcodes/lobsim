@@ -18,7 +18,7 @@ A run bundle is two files, `meta.json` and `data.bin`, produced by
 From this `web/` directory:
 
 ```sh
-python3 -m http.server
+python3 -m http.server --bind 127.0.0.1
 ```
 
 then open <http://localhost:8000/?run=NAME>, which fetches

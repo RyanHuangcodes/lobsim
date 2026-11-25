@@ -78,7 +78,7 @@ Two ways, no build step either way:
 - **File picker (works from `file://`).** Open `web/index.html` directly in a browser,
   click **Open run…**, and select the run's `meta.json` and `data.bin`. No server
   needed.
-- **Local server.** From the `web/` directory run `python3 -m http.server` and open
+- **Local server.** From the `web/` directory run `python3 -m http.server --bind 127.0.0.1` and open
   <http://localhost:8000/?run=NAME>, which fetches `web/runs/NAME/meta.json` and
   `web/runs/NAME/data.bin`. Place bundles under `web/runs/<name>/` (that directory is
   for local testing and is not committed).
@@ -93,7 +93,9 @@ would exceed the target it coarsens the sampling to fit: the heatmap and ladder 
 periods are widened, and the heatmap is **time-weighted downsampled** so that a wider
 column still reflects how long each level held its size rather than just its value at a
 single instant. Raising `--budget-mb` keeps finer sampling at the cost of a larger
-`data.bin`; lowering it produces a smaller, coarser bundle.
+`data.bin`; lowering it produces a smaller, coarser bundle. If no sampling fits the budget,
+for example because the run's prices span more rows than the budget has bytes, the exporter
+writes nothing and exits with code 2.
 
 ## Publishing to GitHub Pages
 
