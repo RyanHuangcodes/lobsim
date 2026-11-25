@@ -60,7 +60,7 @@ class LobsterExporter {
                       int direction);
   void write_audit(int type, std::int64_t id, std::int64_t size, std::int64_t price, int direction,
                    const char* status);
-  std::string book_row() const;
+  void book_row(std::string& out) const;  // the orderbook row of the mirror's top L, written into `out`
   [[noreturn]] void fail(const std::string& what) const;
   std::optional<lob::OrderView> mirror_order(lob::OrderId engine_id) const;
   lob::OrderView resting(lob::OrderId engine_id, const char* what) const;
@@ -84,6 +84,9 @@ class LobsterExporter {
   LikeOptions like_;
   Xoshiro256StarStar rng_;
   std::string last_row_;
+  // Scratch buffers reused for every request and message, so the per-request comparison of the two
+  // books and the row building make no allocation once they have grown (D-907).
+  mutable std::vector<lob::LevelView> scratch_a_, scratch_b_;
   std::int64_t halt_ns_{0};
   std::int64_t window_end_ns_{0};
   std::int64_t next_hidden_ns_{0};

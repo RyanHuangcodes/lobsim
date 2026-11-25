@@ -1,6 +1,7 @@
 #include "sim/lobster_export.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <istream>
 #include <limits>
 #include <ostream>
@@ -82,7 +83,9 @@ void LobsterExporter::request(const sim::LoggedRequest& r) {
     if (const auto o = engine_.order(*subject)) emit(1, *subject, o->remaining, o->price, o->side);
   }
   for (const lob::Side side : {lob::Side::Buy, lob::Side::Sell}) {
-    if (engine_.depth(side, kAllLevels) != mirror_.depth(side, kAllLevels)) {
+    engine_.depth(side, kAllLevels, scratch_a_);
+    mirror_.depth(side, kAllLevels, scratch_b_);
+    if (scratch_a_ != scratch_b_) {
       fail(std::string("after this request the exported book differs from the engine's on the ") +
            (side == lob::Side::Buy ? "bid" : "ask") + " side");
     }
@@ -136,7 +139,7 @@ void LobsterExporter::write_injected(std::int64_t at_ns, int type, std::int64_t 
   const replay::LobsterMsg m{kLobsterOpenNs + (at_ns - like_.window_start_ns), type, id,
                              size, type == 7 ? price : price * price_scale_, direction};
   messages_ << replay::format_message_line(m) << '\n';
-  if (last_row_.empty()) last_row_ = book_row();
+  if (last_row_.empty()) book_row(last_row_);
   orderbook_ << last_row_ << '\n';
   ++written_;
   ++by_type_[type];
@@ -151,21 +154,38 @@ void LobsterExporter::write_audit(int type, std::int64_t id, std::int64_t size, 
           << direction << ',' << status << ',' << written_ << '\n';
 }
 
-std::string LobsterExporter::book_row() const {
-  const std::vector<lob::LevelView> asks = mirror_.depth(lob::Side::Sell, levels_);
-  const std::vector<lob::LevelView> bids = mirror_.depth(lob::Side::Buy, levels_);
-  const std::string empty_ask = like_.on ? "0,0" : std::to_string(kEmptyAsk) + ",0";
-  const std::string empty_bid = like_.on ? "0,0" : std::to_string(kEmptyBid) + ",0";
-  std::string row;
+namespace {
+
+void append_int(std::string& s, std::int64_t v) {
+  char buf[24];
+  const auto r = std::to_chars(buf, buf + sizeof buf, v);
+  s.append(buf, r.ptr);
+}
+
+}  // namespace
+
+// The same text as joining std::to_string of every field: to_chars writes the same decimal digits.
+void LobsterExporter::book_row(std::string& out) const {
+  mirror_.depth(lob::Side::Sell, levels_, scratch_a_);
+  mirror_.depth(lob::Side::Buy, levels_, scratch_b_);
+  const auto level = [&](const std::vector<lob::LevelView>& side, std::size_t i, std::int64_t empty_price) {
+    if (i < side.size()) {
+      append_int(out, side[i].price * price_scale_);
+      out += ',';
+      append_int(out, side[i].total_qty);
+    } else {
+      if (like_.on) out += '0';
+      else append_int(out, empty_price);
+      out += ",0";
+    }
+  };
+  out.clear();
   for (std::size_t i = 0; i < levels_; ++i) {
-    if (i > 0) row += ',';
-    row += i < asks.size() ? std::to_string(asks[i].price * price_scale_) + ',' + std::to_string(asks[i].total_qty)
-                           : empty_ask;
-    row += ',';
-    row += i < bids.size() ? std::to_string(bids[i].price * price_scale_) + ',' + std::to_string(bids[i].total_qty)
-                           : empty_bid;
+    if (i > 0) out += ',';
+    level(scratch_a_, i, kEmptyAsk);
+    out += ',';
+    level(scratch_b_, i, kEmptyBid);
   }
-  return row;
 }
 
 [[noreturn]] void LobsterExporter::fail(const std::string& what) const {
@@ -187,9 +207,9 @@ lob::OrderView LobsterExporter::resting(lob::OrderId engine_id, const char* what
 
 // Inside the true book's top-L window on `side` (see the file comment).
 bool LobsterExporter::in_window(lob::Side side, lob::Price price) const {
-  const std::vector<lob::LevelView> top = mirror_.depth(side, levels_);
-  if (top.size() < levels_) return true;
-  return side == lob::Side::Sell ? price <= top.back().price : price >= top.back().price;
+  mirror_.depth(side, levels_, scratch_a_);
+  if (scratch_a_.size() < levels_) return true;
+  return side == lob::Side::Sell ? price <= scratch_a_.back().price : price >= scratch_a_.back().price;
 }
 
 void LobsterExporter::emit(int type, lob::OrderId id, lob::Qty size, lob::Price price, lob::Side side) {
@@ -211,7 +231,7 @@ void LobsterExporter::emit(int type, lob::OrderId id, lob::Qty size, lob::Price 
   const std::int64_t shown_ns = like_.on ? kLobsterOpenNs + (time_ - like_.window_start_ns) : kLobsterOpenNs + time_;
   const replay::LobsterMsg m{shown_ns, type, static_cast<std::int64_t>(id), size, price * price_scale_, direction};
   messages_ << replay::format_message_line(m) << '\n';
-  last_row_ = book_row();
+  book_row(last_row_);
   orderbook_ << last_row_ << '\n';
   ++written_;
   ++by_type_[type];

@@ -20,6 +20,9 @@ namespace calib {
 namespace {
 
 constexpr std::int64_t kNs = 1'000'000'000;
+// The longest window the fingerprint accepts. The work and memory are per second of window, so a
+// far-off time in a file (or a huge --to-s) must not drive them (D-902). A LOBSTER day is 86,400 s.
+constexpr std::int64_t kMaxWindowSeconds = 1'000'000;
 const double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 std::int64_t floor_div(std::int64_t a, std::int64_t b) {  // b > 0
@@ -201,6 +204,9 @@ Prepared Prepared::from_streams(std::istream& messages, std::istream& orderbook,
   };
   // Accounts [pos, t1) to the state in force, split at second boundaries.
   auto advance = [&](std::int64_t t1, bool final) {
+    if (t1 - I.from > kMaxWindowSeconds * kNs) {
+      throw std::runtime_error("the window is longer than " + std::to_string(kMaxWindowSeconds) + " s");
+    }
     record_grid(t1, final);
     std::int64_t t0 = pos;
     while (t0 < t1) {

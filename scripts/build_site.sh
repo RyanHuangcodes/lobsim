@@ -78,28 +78,27 @@ echo "build_site: copying web/ into site/"
 cp -R "${root}/web/." "${site}/"
 rm -rf "${site}/test"
 
-# Default to run=demo: a tiny inline script sets ?run=demo before app.js reads location.search, so
-# the published root URL loads the demo run while explicit ?run=<name> links still override it. We
-# edit only the generated site copy; the committed web/index.html is untouched.
+# Default to run=demo: a small script sets ?run=demo before app.js reads location.search, so the
+# published root URL loads the demo run while explicit ?run=<name> links still override it. It is a
+# file, not inline, so the page's Content-Security-Policy can forbid inline scripts. We edit only the
+# generated site copy; the committed web/index.html is untouched.
+cat > "${site}/js/default-run.js" <<'JS'
+// GitHub Pages default: load the committed demo run when no ?run is supplied.
+(function () {
+  var p = new URLSearchParams(location.search);
+  if (!p.get("run")) {
+    p.set("run", "demo");
+    history.replaceState(null, "", location.pathname + "?" + p.toString() + location.hash);
+  }
+})();
+JS
 python3 - "${site}/index.html" <<'PY'
 import sys
 path = sys.argv[1]
 with open(path, encoding="utf-8") as f:
     html = f.read()
 needle = '  <script type="module" src="js/app.js"></script>'
-snippet = (
-    '  <script>\n'
-    '    // GitHub Pages default: load the committed demo run when no ?run is supplied.\n'
-    '    (function () {\n'
-    '      var p = new URLSearchParams(location.search);\n'
-    '      if (!p.get("run")) {\n'
-    '        p.set("run", "demo");\n'
-    '        history.replaceState(null, "", location.pathname + "?" + p.toString() + location.hash);\n'
-    '      }\n'
-    '    })();\n'
-    '  </script>\n'
-    '  <script type="module" src="js/app.js"></script>'
-)
+snippet = '  <script src="js/default-run.js"></script>\n' + needle
 if needle not in html:
     sys.stderr.write("build_site: ERROR could not find the app.js module tag to inject the default run\n")
     sys.exit(1)

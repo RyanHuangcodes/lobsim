@@ -8,7 +8,6 @@
 namespace replay {
 
 using detail::fail;
-using detail::split;
 using detail::strip_cr;
 using detail::to_int;
 
@@ -21,8 +20,15 @@ Parsed<BookRow> parse_book_line(std::string_view line, int levels) {
   if (have != want) {
     return fail(std::move(r), "expected " + std::to_string(want) + " fields, found " + std::to_string(have));
   }
-  std::vector<std::string_view> f(want);
-  split(line, f.data(), want);
+  // The fields in line order (exactly `want` of them, counted above): level by level, the ask
+  // price, ask size, bid price and bid size, the same order the errors below are checked in.
+  std::size_t start = 0;
+  const auto next_field = [&]() {
+    const std::size_t comma = line.find(',', start);
+    const std::string_view f = line.substr(start, comma == std::string_view::npos ? std::string_view::npos : comma - start);
+    start = comma == std::string_view::npos ? line.size() : comma + 1;
+    return f;
+  };
   static constexpr const char* kName[4] = {"ask price", "ask size", "bid price", "bid size"};
   BookRow row;
   row.asks.reserve(static_cast<std::size_t>(levels));
@@ -30,7 +36,7 @@ Parsed<BookRow> parse_book_line(std::string_view line, int levels) {
   for (std::size_t lvl = 0; lvl < static_cast<std::size_t>(levels); ++lvl) {
     std::int64_t v[4];
     for (std::size_t k = 0; k < 4; ++k) {
-      const auto x = to_int(f[4 * lvl + k]);
+      const auto x = to_int(next_field());
       if (!x) {
         return fail(std::move(r), std::string(kName[k]) + " of level " + std::to_string(lvl + 1) + ": not an integer");
       }

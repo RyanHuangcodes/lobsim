@@ -1,7 +1,10 @@
 # lobsim_calibrate on the hand-written km_example fixture (upgrade 3, C1): exit codes, the files it
 # writes, and their labels. CALIBRATE, FIXTURE and OUT are passed by CMakeLists.txt.
-file(REMOVE_RECURSE ${OUT})
-file(MAKE_DIRECTORY ${OUT})
+if(NOT OUT)
+  message(FATAL_ERROR "OUT is empty")
+endif()
+file(REMOVE_RECURSE "${OUT}")
+file(MAKE_DIRECTORY "${OUT}")
 set(M ${FIXTURE}/TEST_2012-06-21_34200000_57600000_message_3.csv)
 set(B ${FIXTURE}/TEST_2012-06-21_34200000_57600000_orderbook_3.csv)
 

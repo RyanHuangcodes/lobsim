@@ -17,7 +17,6 @@
 namespace replay {
 namespace {
 
-constexpr std::size_t kRecent = 20;
 constexpr std::size_t kAllLevels = std::numeric_limits<std::size_t>::max();
 
 lob::Side side_of(int direction) { return direction > 0 ? lob::Side::Buy : lob::Side::Sell; }
@@ -219,8 +218,16 @@ PublishedRow published_row(const Parsed<BookRow>& parsed) {
 }
 
 void Replayer::remember(const Entry& e) {
-  recent_.push_back("line " + std::to_string(e.line) + ": " + e.text);
-  if (recent_.size() > kRecent) recent_.pop_front();
+  RecentLine& slot = recent_[recent_next_];
+  slot.line = e.line;
+  slot.text.assign(e.text);
+  recent_next_ = (recent_next_ + 1) % kRecentLines;
+  if (recent_count_ < kRecentLines) ++recent_count_;
+}
+
+std::string Replayer::recent_line(std::size_t i) const {
+  const RecentLine& r = recent_[(recent_next_ + kRecentLines - recent_count_ + i) % kRecentLines];
+  return "line " + std::to_string(r.line) + ": " + r.text;
 }
 
 void Replayer::seed(const BookRow& row) {
@@ -348,8 +355,10 @@ void Replayer::compare(const Entry& e) {
   }
   const BookRow& row = *e.book.value;
   const auto L = static_cast<std::size_t>(levels_);
-  const std::vector<lob::LevelView> asks = book_.depth(lob::Side::Sell, L);
-  const std::vector<lob::LevelView> bids = book_.depth(lob::Side::Buy, L);
+  book_.depth(lob::Side::Sell, L, asks_now_);
+  book_.depth(lob::Side::Buy, L, bids_now_);
+  const std::vector<lob::LevelView>& asks = asks_now_;
+  const std::vector<lob::LevelView>& bids = bids_now_;
   if (!asks.empty() && !bids.empty() && bids.front().price >= asks.front().price) ++c.crossed_state;
 
   std::size_t exact = 0;
@@ -465,7 +474,7 @@ void Replayer::fail_strict(const Entry& e, int exact_depth) {
   f.ours_asks = book_.depth(lob::Side::Sell, L);
   f.ours_bids = book_.depth(lob::Side::Buy, L);
   f.oracle = e.book.value;
-  f.recent.assign(recent_.begin(), recent_.end());
+  for (std::size_t i = 0; i < recent_size(); ++i) f.recent.push_back(recent_line(i));
   summary_.strict_failure = std::move(f);
 }
 
