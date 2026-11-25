@@ -108,3 +108,27 @@ TYPED_TEST(QueryTest, CrossingGtcLimitTradesInsteadOfRestingCrossed) {
   EXPECT_EQ(h.book().best_ask(), std::nullopt);
   EXPECT_NO_THROW(h.book().validate());
 }
+
+// depth(side, n, out) gives what depth(side, n) gives, and reuses the vector (D-906).
+TEST(OrderBookDepthInto, MatchesDepthAndReusesTheBuffer) {
+  lob::OrderBook b;
+  lob::EventBuffer ev;
+  for (lob::Price p : {100, 101, 103}) {
+    b.submit(lob::NewOrder{1, 0, lob::Side::Sell, lob::OrderType::Limit, lob::TIF::GTC, p, 2, false,
+                           lob::STP::CancelTaking},
+             ev);
+    b.submit(lob::NewOrder{1, 0, lob::Side::Buy, lob::OrderType::Limit, lob::TIF::GTC, p - 10, 3, false,
+                           lob::STP::CancelTaking},
+             ev);
+  }
+  std::vector<lob::LevelView> out{{1, 1}, {2, 2}, {3, 3}, {4, 4}, {5, 5}};
+  const auto* data = out.data();
+  for (const lob::Side side : {lob::Side::Buy, lob::Side::Sell}) {
+    for (const std::size_t n : {std::size_t{0}, std::size_t{1}, std::size_t{2}, std::size_t{3}, std::size_t{10}}) {
+      b.depth(side, n, out);
+      EXPECT_EQ(out, b.depth(side, n)) << "n " << n;
+      EXPECT_EQ(out.data(), data) << "the buffer was reallocated";
+    }
+  }
+}
+

@@ -5,6 +5,7 @@
 // orderbook file is the book right after message k. Prices stay in LOBSTER units (dollars x
 // 10000) and times in integer nanoseconds: nothing here uses a fractional number type.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -342,7 +343,20 @@ class Replayer {
   std::unordered_map<std::int64_t, lob::OrderId> by_external_;  // resting orders only
   std::unordered_map<lob::OrderId, std::int64_t> external_of_;  // the reverse, for reports
   std::unordered_set<lob::OrderId> synthetic_;                   // seed and resync orders, resting
-  std::deque<std::string> recent_;                               // the last kRecent message lines
+  // The last kRecentLines message lines, as a ring whose strings keep their capacity, so remembering a
+  // line allocates nothing once the ring has filled (D-912). recent_line(i) formats the i-th oldest.
+  static constexpr std::size_t kRecentLines = 20;
+  struct RecentLine {
+    std::uint64_t line{0};
+    std::string text;
+  };
+  std::array<RecentLine, kRecentLines> recent_{};
+  std::size_t recent_next_{0};   // slot of the next line
+  std::size_t recent_count_{0};  // lines held, at most kRecentLines
+  std::size_t recent_size() const noexcept { return recent_count_; }
+  std::string recent_line(std::size_t i) const;
+  // Scratch buffers for the top-L comparison of every row.
+  std::vector<lob::LevelView> asks_now_, bids_now_;
   // Depth to which the previous row was exact before any correction (0 if it was not compared):
   // the matching check's trust rule reads it.
   int previous_exact_depth_{0};
