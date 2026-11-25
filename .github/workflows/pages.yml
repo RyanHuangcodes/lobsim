@@ -1,12 +1,14 @@
 name: pages
 
 # Publish the lobsim replay dashboard to GitHub Pages. Separate from ci.yml so that workflow stays
-# untouched. Deploys only run from the default branch, so nothing publishes until upgrade/dashboard
-# is merged into main. See DASHBOARD.md for the one-time Settings -> Pages setup.
+# untouched. Deploys only run from the default branch. Pull requests run the build job only, so a
+# change that breaks the site build fails the pull request, not main. See DASHBOARD.md for the
+# one-time Settings -> Pages setup.
 
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 # Least privilege at the top level; the deploy job widens its own permissions below. The actions
@@ -15,10 +17,12 @@ on:
 permissions:
   contents: read
 
-# Standard Pages concurrency: let an in-flight deploy finish rather than cancelling it.
+# Standard Pages concurrency: let an in-flight deploy finish rather than cancelling it. Each ref has
+# its own group, so a pull request never queues behind or replaces a deploy of main; a new push to a
+# pull request cancels that pull request's older build.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -31,8 +35,10 @@ jobs:
       - name: Build the site (Release build + 1-hour seed-42 demo run + export + web assets)
         run: bash scripts/build_site.sh
       - name: Configure Pages
+        if: github.event_name != 'pull_request'
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - name: Upload the site artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
