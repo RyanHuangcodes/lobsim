@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
 
 #include "calib/fingerprint.hpp"
@@ -18,6 +19,7 @@ int usage(const std::string& why) {
                why.c_str());
   return 1;
 }
+constexpr std::int64_t kMaxSeconds = std::numeric_limits<std::int64_t>::max() / 1'000'000'000;
 bool to_int(const std::string& v, std::int64_t& out) {
   const auto [p, ec] = std::from_chars(v.data(), v.data() + v.size(), out);
   return !v.empty() && ec == std::errc{} && p == v.data() + v.size();
@@ -41,6 +43,9 @@ int main(int argc, char** argv) {
     else if (a == "--orderbook") bp = v;
     else if (a == "--out") out_path = v;
     else if (!to_int(v, n) || n < 0) return usage(a + " needs a non-negative integer");
+    // Bounded so the conversions below can neither overflow nor truncate (D-901).
+    else if ((a == "--from-s" || a == "--to-s") && n > kMaxSeconds) return usage(a + " is too large");
+    else if ((a == "--resamples" || a == "--block-s") && n > std::numeric_limits<int>::max()) return usage(a + " is too large");
     else if (a == "--tick-units") tick = n;
     else if (a == "--from-s") w.from_ns = n * 1'000'000'000;
     else if (a == "--to-s") w.to_ns = n * 1'000'000'000;

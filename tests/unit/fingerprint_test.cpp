@@ -203,6 +203,23 @@ TEST(FingerprintInput, Rejects) {
   EXPECT_THROW(Prepared::from_streams(m3, b3, 1), std::runtime_error);  // not a multiple of 4 columns
 }
 
+// The work is per second of window, so a far-off time (in the data or in --to-s) is refused at
+// once instead of looping until memory runs out (D-902).
+TEST(FingerprintInput, RejectsAWindowLongerThanTheCap) {
+  std::istringstream m("1.000000000,1,1,10,100,1\n9000000000.000000000,1,2,10,100,1\n"),
+      b("102,5,100,5\n102,5,100,5\n");
+  try {
+    Prepared::from_streams(m, b, 1);
+    FAIL() << "a 9e9 s window was accepted";
+  } catch (const std::runtime_error& e) {
+    EXPECT_NE(std::string(e.what()).find("longer than"), std::string::npos) << e.what();
+  }
+  std::istringstream m2("1.000000000,1,1,10,100,1\n"), b2("102,5,100,5\n");
+  EXPECT_THROW(Prepared::from_streams(m2, b2, 1, win(0, 2'000'000)), std::runtime_error);
+  std::istringstream m3("1.000000000,1,1,10,100,1\n"), b3("102,5,100,5\n");
+  EXPECT_NO_THROW(Prepared::from_streams(m3, b3, 1, win(0, 86'400)));  // a whole day is fine
+}
+
 TEST(FingerprintInput, BurstRules) {
   // type 4 messages: a burst is a maximal run of consecutive type 4 with the same time and direction.
   //  t=1 d+1, t=1 d+1            -> burst A (2 messages)
