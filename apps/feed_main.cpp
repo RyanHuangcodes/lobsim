@@ -254,6 +254,7 @@ int check(const std::string& run_dir) {
   h.re.out.reserve(1 << 12);
   lob::EventBuffer events;
   std::vector<std::pair<std::uint64_t, std::uint64_t>> trades;  // the engine's (trade_id, qty)
+  std::vector<lob::LevelView> ours, theirs;  // the top levels of both books, reused for every request
   std::uint64_t trade_count = 0, trade_shares = 0, digests = 0;
 
   try {
@@ -288,8 +289,8 @@ int check(const std::string& run_dir) {
                        price_text(engine.best_ask())};
       }
       for (const lob::Side side : {lob::Side::Buy, lob::Side::Sell}) {
-        const std::vector<lob::LevelView> ours = fb.book().depth(side, kCompareLevels);
-        const std::vector<lob::LevelView> theirs = engine.depth(side, kCompareLevels);
+        fb.book().depth(side, kCompareLevels, ours);
+        engine.depth(side, kCompareLevels, theirs);
         if (ours != theirs) {
           throw Mismatch{where_k + ": the " + (side == lob::Side::Buy ? "bid" : "ask") + " side differs: feed " +
                          levels_text(ours) + ", engine " + levels_text(theirs)};
