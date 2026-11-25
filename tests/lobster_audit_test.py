@@ -16,6 +16,10 @@ import subprocess
 import sys
 
 audit_tool, lobster, work = sys.argv[1:4]
+# The work folder is deleted: only ever the one ctest passes (CMakeLists.txt), never a folder a
+# mistyped argument names.
+if os.path.basename(os.path.normpath(work)) != 'lobster_audit_self_test':
+    sys.exit('lobster_audit_test.py: the work folder must be named lobster_audit_self_test, not ' + work)
 shutil.rmtree(work, ignore_errors=True)
 os.makedirs(work)
 failures = []

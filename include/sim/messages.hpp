@@ -11,6 +11,10 @@ namespace sim {
 using TimeNs = std::int64_t;        // simulation time: nanoseconds since the start of the run
 using AgentIndex = std::uint32_t;   // position in the simulator's agent list; OwnerId = index + 1
 
+// Owner ids of an agent that has more than one (Simulator::set_owner_count) are taken from
+// here upwards, so no agent's own id (agent index + 1) ever depends on them.
+inline constexpr lob::OwnerId kExtraOwnerBase = 1u << 30;
+
 // Top of book. A side with qty 0 (and price 0) is empty.
 struct BBO {
   lob::Price bid{0};

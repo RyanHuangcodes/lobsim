@@ -5,6 +5,7 @@
 // orderbook file is the book right after message k. Prices stay in LOBSTER units (dollars x
 // 10000) and times in integer nanoseconds: nothing here uses a fractional number type.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -211,6 +212,58 @@ struct Entry {
   Parsed<BookRow> book;
 };
 
+// ---------------------------------------------------------------- observer (calibration, upgrade 3)
+
+// A published orderbook row as an observer sees it. This is the true book; the replay book can
+// differ from it (after unknown ids or filtered messages), so an observer that measures the market
+// reads this, never Replayer::book().
+struct PublishedRow {
+  const BookRow* row{nullptr};  // nullptr: no such row (before line 1), or the line did not parse
+  bool malformed{false};        // levels out of order: no bounds are given
+  // The published window: on a side that shows all L levels, the L-th level's price. An ask above
+  // ask_bound, or a bid below bid_bound, is outside the window, and LOBSTER sends no message about
+  // it. nullopt: the side shows fewer than L levels, so the whole side is visible.
+  std::optional<std::int64_t> ask_bound;
+  std::optional<std::int64_t> bid_bound;
+};
+
+// The row and its bounds, by the rule above (the same window as resync's, D-172).
+PublishedRow published_row(const Parsed<BookRow>& parsed);
+
+// One line as handed to an observer, after the replayer applied the message and compared the row.
+// The pointers are valid only during the call.
+struct ObservedMessage {
+  std::uint64_t line{0};
+  const LobsterMsg* msg{nullptr};  // nullptr: the message line did not parse
+  PublishedRow before;             // the previous line's row: the true book just before this message
+  PublishedRow after;              // this line's row: the true book right after it
+  // The matching check's burst grouping (D-180): a maximal run of consecutive type-4 messages with
+  // the same time and Direction is one aggressive order. For a type-4 message, burst_size is the
+  // number of messages of its burst and burst_position its place there (0-based). burst_size is 0
+  // for every other message, and for line 1, which the opening seed consumes.
+  std::size_t burst_size{0};
+  std::size_t burst_position{0};
+};
+
+enum class StopReason : std::uint8_t { EndOfInput, TimeBound, StrictFailure };
+
+// Where a run stopped.
+struct RunEnd {
+  StopReason reason{StopReason::EndOfInput};
+  std::uint64_t lines{0};  // lines replayed
+  // TimeBound only: the line read to see the bound, and its time. It was not replayed, compared,
+  // counted or observed, and nothing after it was read.
+  std::uint64_t bound_line{0};
+  std::int64_t bound_time_ns{0};
+};
+
+class ReplayObserver {
+ public:
+  virtual ~ReplayObserver() = default;
+  virtual void on_message(const ObservedMessage& m) = 0;
+  virtual void on_end(const RunEnd& end) { (void)end; }
+};
+
 class Replayer {
  public:
   // levels: L of the orderbook file (1..kMaxLevels). Throws std::invalid_argument for an option out of range.
@@ -218,20 +271,40 @@ class Replayer {
   Replayer(const Replayer&) = delete;
   Replayer& operator=(const Replayer&) = delete;
 
-  // Replays both streams to the end, or to the first strict failure. Throws InputError.
+  // Replays both streams to the end, to the first strict failure, or to the time bound. Throws InputError.
   const Summary& run(std::istream& messages, std::istream& orderbook);
 
   const Summary& summary() const { return summary_; }
   const lob::OrderBook& book() const { return book_; }
 
+  // Calibration hooks (upgrade 3). Set before run(). Without them, run() is exactly as before.
+  //
+  // stop_before: the replay ends before the first message line that parses with a time at or after
+  // time_ns. That one line is read, to see the bound, and nothing after it; the burst lookahead never
+  // crosses it, because a burst shares one time.
+  void stop_before(std::int64_t time_ns) { stop_before_ns_ = time_ns; }
+  // observe: every line is handed to `observer` (not owned; nullptr detaches) after it has been
+  // applied and compared, from the first message line that parses with a time at or after from_ns
+  // on. Earlier lines are replayed, since the book needs them, but not observed; the first observed
+  // line still sees the row before it.
+  void observe(ReplayObserver* observer, std::int64_t from_ns) {
+    observer_ = observer;
+    observe_from_ns_ = from_ns;
+  }
+  const RunEnd& run_end() const { return run_end_; }
+
  private:
   // Line-by-line reader of both files with a bounded lookahead buffer.
   class Source {
    public:
-    Source(std::istream& messages, std::istream& orderbook, int levels, std::size_t max_lookahead);
+    Source(std::istream& messages, std::istream& orderbook, int levels, std::size_t max_lookahead,
+           std::optional<std::int64_t> stop_before_ns);
     // The i-th entry ahead (0 = the next one), reading as needed; nullptr at the end of input.
     const Entry* peek(std::size_t i);
     std::optional<Entry> next();
+    // The line that stopped the reader at the time bound, and its time (line 0: not stopped there).
+    std::uint64_t bound_line() const { return bound_line_; }
+    std::int64_t bound_time_ns() const { return bound_time_ns_; }
 
    private:
     bool read_one();
@@ -239,8 +312,11 @@ class Replayer {
     std::istream& orderbook_;
     int levels_;
     std::size_t max_lookahead_;
+    std::optional<std::int64_t> stop_before_ns_;
     std::uint64_t line_{0};
     bool ended_{false};
+    std::uint64_t bound_line_{0};
+    std::int64_t bound_time_ns_{0};
     std::deque<Entry> ahead_;
   };
 
@@ -258,6 +334,8 @@ class Replayer {
   // The matching check of the burst that starts at `first` (already taken from the source); the
   // rest of the burst is read through the source's lookahead. Changes nothing in the book.
   void check_burst(const Entry& first, Source& source);
+  // Hands the line to the observer once observing has started; keeps its row as the next "before".
+  void notify(Entry& e);
 
   int levels_;
   ReplayOptions options_;
@@ -265,12 +343,33 @@ class Replayer {
   std::unordered_map<std::int64_t, lob::OrderId> by_external_;  // resting orders only
   std::unordered_map<lob::OrderId, std::int64_t> external_of_;  // the reverse, for reports
   std::unordered_set<lob::OrderId> synthetic_;                   // seed and resync orders, resting
-  std::deque<std::string> recent_;                               // the last kRecent message lines
+  // The last kRecentLines message lines, as a ring whose strings keep their capacity, so remembering a
+  // line allocates nothing once the ring has filled (D-912). recent_line(i) formats the i-th oldest.
+  static constexpr std::size_t kRecentLines = 20;
+  struct RecentLine {
+    std::uint64_t line{0};
+    std::string text;
+  };
+  std::array<RecentLine, kRecentLines> recent_{};
+  std::size_t recent_next_{0};   // slot of the next line
+  std::size_t recent_count_{0};  // lines held, at most kRecentLines
+  std::size_t recent_size() const noexcept { return recent_count_; }
+  std::string recent_line(std::size_t i) const;
+  // Scratch buffers for the top-L comparison of every row.
+  std::vector<lob::LevelView> asks_now_, bids_now_;
   // Depth to which the previous row was exact before any correction (0 if it was not compared):
   // the matching check's trust rule reads it.
   int previous_exact_depth_{0};
   std::size_t burst_left_{0};  // messages of the current burst still to come after this one
+  std::size_t burst_size_{0};  // messages of the current burst (set by check_burst)
   Summary summary_;
+  // Calibration hooks.
+  std::optional<std::int64_t> stop_before_ns_;
+  ReplayObserver* observer_{nullptr};
+  std::int64_t observe_from_ns_{0};
+  bool observing_{false};
+  Parsed<BookRow> previous_book_;  // the last line's row, kept only while an observer is attached
+  RunEnd run_end_;
 };
 
 // Opens both files, takes L from the orderbook file name (and checks the message file name if it

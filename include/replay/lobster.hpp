@@ -79,6 +79,19 @@ Parsed<BookRow> parse_book_line(std::string_view line, int levels);
 // after any directory prefix ('/' separated); nullopt for any other name or L < 1.
 std::optional<int> levels_from_filename(std::string_view path);
 
+// The parts of a LOBSTER file name TICKER_DATE_START_END_KIND_L.csv (after any directory prefix,
+// '/' separated): DATE is YYYY-MM-DD, START and END are milliseconds after midnight, KIND is
+// "message" or "orderbook", L >= 1. The ticker is everything before _DATE_ and is not empty.
+struct LobsterFileName {
+  std::string ticker;
+  std::string date;
+  std::int64_t start_ms{0};
+  std::int64_t end_ms{0};
+  std::string kind;
+  int levels{0};
+};
+std::optional<LobsterFileName> parse_lobster_filename(std::string_view path);
+
 // Number of comma-separated fields of a line (one trailing '\r' ignored); an empty line has 1.
 std::size_t count_fields(std::string_view line);
 

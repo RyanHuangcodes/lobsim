@@ -126,3 +126,36 @@ test("loadBundle rejects a wrong schema_version", () => {
   const bad = { ...meta, schema_version: meta.schema_version + 1 };
   assert.throws(() => loadBundle(bad, ab), /schema_version/);
 });
+
+// A crafted bundle must be refused when loaded, not when the page draws it (D-903).
+function craft(edit) {
+  const { meta, ab } = loadFixture();
+  const m = structuredClone(meta);
+  edit(m);
+  return () => loadBundle(m, ab);
+}
+
+test("loadBundle refuses a heatmap larger than its series", () => {
+  assert.throws(craft((m) => { m.heatmap.rows = 16000; m.heatmap.cols = 16000; }), /heatmap/);
+  assert.throws(craft((m) => { m.heatmap.rows = 1.5; }), /heatmap/);
+  assert.throws(craft((m) => { m.heatmap.cols += 1; }), /heatmap/);
+});
+
+test("loadBundle refuses missing or short series and a bad level count", () => {
+  assert.throws(craft((m) => { m.series = m.series.filter((s) => s.name !== "mid"); }), /mid is missing/);
+  assert.throws(craft((m) => { m.series.find((s) => s.name === "mm_pnl").count -= 1; }), /mm_pnl has/);
+  assert.throws(craft((m) => { m.sampling.levels = 1e9; }), /levels/);
+  assert.throws(craft((m) => { m.sampling.levels = m.sampling.levels + 1; }), /is missing/);
+});
+
+test("loadBundle refuses repeated, prototype and malformed series entries", () => {
+  assert.throws(craft((m) => { m.series.push({ ...m.series[0] }); }), /repeated/);
+  assert.throws(craft((m) => { m.series.push({ name: "x", type: "constructor", offset: 0, count: 1 }); }), /unknown type/);
+  assert.throws(craft((m) => { m.series[0].count = -1; }), /invalid offset or count/);
+  const { meta, ab } = loadFixture();
+  const m = structuredClone(meta);
+  m.series.push({ name: "__proto__", type: "u8", offset: 0, count: 1 });
+  const { views } = loadBundle(m, ab);
+  assert.equal(Object.getPrototypeOf(views), null);
+  assert.equal(Object.prototype.polluted, undefined);
+});

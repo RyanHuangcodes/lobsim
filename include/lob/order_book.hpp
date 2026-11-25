@@ -42,6 +42,9 @@ class OrderBook {
   std::optional<Price> best_ask() const;
   std::optional<LevelView> best_level(Side side) const;
   std::vector<LevelView> depth(Side side, std::size_t n) const;
+  // The same levels written into `out` (cleared first), reusing its capacity: no allocation once
+  // `out` has grown, for callers that read the book after every message (D-906).
+  void depth(Side side, std::size_t n, std::vector<LevelView>& out) const;
   std::optional<OrderView> order(OrderId id) const;
   std::vector<OrderView> level_orders(Side side, Price price) const;
   std::size_t resting_orders() const;

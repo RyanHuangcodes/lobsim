@@ -17,7 +17,6 @@
 namespace replay {
 namespace {
 
-constexpr std::size_t kRecent = 20;
 constexpr std::size_t kAllLevels = std::numeric_limits<std::size_t>::max();
 
 lob::Side side_of(int direction) { return direction > 0 ? lob::Side::Buy : lob::Side::Sell; }
@@ -53,8 +52,13 @@ std::optional<Mode> parse_mode(std::string_view s) {
 
 // ---------------------------------------------------------------- input
 
-Replayer::Source::Source(std::istream& messages, std::istream& orderbook, int levels, std::size_t max_lookahead)
-    : messages_(messages), orderbook_(orderbook), levels_(levels), max_lookahead_(max_lookahead) {}
+Replayer::Source::Source(std::istream& messages, std::istream& orderbook, int levels, std::size_t max_lookahead,
+                         std::optional<std::int64_t> stop_before_ns)
+    : messages_(messages),
+      orderbook_(orderbook),
+      levels_(levels),
+      max_lookahead_(max_lookahead),
+      stop_before_ns_(stop_before_ns) {}
 
 bool Replayer::Source::read_one() {
   if (ended_) return false;
@@ -71,8 +75,15 @@ bool Replayer::Source::read_one() {
                      std::to_string(line_) + " but the " + (got_msg ? "message" : "orderbook") +
                      " file goes on: both must have one line per message");
   }
-  e.line = ++line_;
   e.msg = parse_message_line(e.text);
+  if (stop_before_ns_ && e.msg.ok() && e.msg.value->time_ns >= *stop_before_ns_) {
+    // The time bound: this line is only looked at, and nothing after it is read.
+    ended_ = true;
+    bound_line_ = line_ + 1;
+    bound_time_ns_ = e.msg.value->time_ns;
+    return false;
+  }
+  e.line = ++line_;
   e.book = parse_book_line(e.book_text, levels_);
   ahead_.push_back(std::move(e));
   return true;
@@ -126,7 +137,7 @@ Replayer::Replayer(int levels, ReplayOptions options)
 }
 
 const Summary& Replayer::run(std::istream& messages, std::istream& orderbook) {
-  Source source(messages, orderbook, levels_, options_.max_lookahead);
+  Source source(messages, orderbook, levels_, options_.max_lookahead, stop_before_ns_);
   Counters& c = summary_.counters;
   while (std::optional<Entry> e = source.next()) {
     ++summary_.lines;
@@ -156,14 +167,67 @@ const Summary& Replayer::run(std::istream& messages, std::istream& orderbook) {
       apply(*e->msg.value);
     }
     compare(*e);
+    if (observer_ != nullptr) notify(*e);
     if (summary_.strict_failure) break;
   }
+  run_end_.lines = summary_.lines;
+  if (summary_.strict_failure) {
+    run_end_.reason = StopReason::StrictFailure;
+  } else if (source.bound_line() != 0) {
+    run_end_.reason = StopReason::TimeBound;
+    run_end_.bound_line = source.bound_line();
+    run_end_.bound_time_ns = source.bound_time_ns();
+  }
+  if (observer_ != nullptr) observer_->on_end(run_end_);
   return summary_;
 }
 
+void Replayer::notify(Entry& e) {
+  if (!observing_) {
+    observing_ = e.msg.ok() && e.msg.value->time_ns >= observe_from_ns_;
+  }
+  if (observing_) {
+    ObservedMessage m;
+    m.line = e.line;
+    m.msg = e.msg.ok() ? &*e.msg.value : nullptr;
+    m.before = published_row(previous_book_);  // a default Parsed (no row) before line 1
+    m.after = published_row(e.book);
+    if (m.msg != nullptr && m.msg->type == 4 && e.line != 1) {
+      // check_burst ran at the burst's first message; burst_left_ counts the members still to come.
+      m.burst_size = burst_size_;
+      m.burst_position = burst_size_ - 1 - burst_left_;
+    }
+    observer_->on_message(m);
+  }
+  previous_book_ = std::move(e.book);
+}
+
+PublishedRow published_row(const Parsed<BookRow>& parsed) {
+  PublishedRow p;
+  if (!parsed.ok()) return p;
+  p.row = &*parsed.value;
+  p.malformed = parsed.oracle_malformed;
+  if (p.malformed) return p;
+  // A well-formed side holds its non-empty levels first, so it shows all L levels exactly when
+  // the L-th one is not empty.
+  const std::vector<BookLevel>& asks = parsed.value->asks;
+  const std::vector<BookLevel>& bids = parsed.value->bids;
+  if (!asks.empty() && !asks.back().empty()) p.ask_bound = asks.back().price;
+  if (!bids.empty() && !bids.back().empty()) p.bid_bound = bids.back().price;
+  return p;
+}
+
 void Replayer::remember(const Entry& e) {
-  recent_.push_back("line " + std::to_string(e.line) + ": " + e.text);
-  if (recent_.size() > kRecent) recent_.pop_front();
+  RecentLine& slot = recent_[recent_next_];
+  slot.line = e.line;
+  slot.text.assign(e.text);
+  recent_next_ = (recent_next_ + 1) % kRecentLines;
+  if (recent_count_ < kRecentLines) ++recent_count_;
+}
+
+std::string Replayer::recent_line(std::size_t i) const {
+  const RecentLine& r = recent_[(recent_next_ + kRecentLines - recent_count_ + i) % kRecentLines];
+  return "line " + std::to_string(r.line) + ": " + r.text;
 }
 
 void Replayer::seed(const BookRow& row) {
@@ -291,8 +355,10 @@ void Replayer::compare(const Entry& e) {
   }
   const BookRow& row = *e.book.value;
   const auto L = static_cast<std::size_t>(levels_);
-  const std::vector<lob::LevelView> asks = book_.depth(lob::Side::Sell, L);
-  const std::vector<lob::LevelView> bids = book_.depth(lob::Side::Buy, L);
+  book_.depth(lob::Side::Sell, L, asks_now_);
+  book_.depth(lob::Side::Buy, L, bids_now_);
+  const std::vector<lob::LevelView>& asks = asks_now_;
+  const std::vector<lob::LevelView>& bids = bids_now_;
   if (!asks.empty() && !bids.empty() && bids.front().price >= asks.front().price) ++c.crossed_state;
 
   std::size_t exact = 0;
@@ -408,7 +474,7 @@ void Replayer::fail_strict(const Entry& e, int exact_depth) {
   f.ours_asks = book_.depth(lob::Side::Sell, L);
   f.ours_bids = book_.depth(lob::Side::Buy, L);
   f.oracle = e.book.value;
-  f.recent.assign(recent_.begin(), recent_.end());
+  for (std::size_t i = 0; i < recent_size(); ++i) f.recent.push_back(recent_line(i));
   summary_.strict_failure = std::move(f);
 }
 

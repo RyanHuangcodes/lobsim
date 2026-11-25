@@ -28,6 +28,15 @@ function(export_and_compare levels expected_prefix)
 endfunction()
 
 export_and_compare(3 expected)
+# The files say they are synthetic: an export is lobsim's own output, never market data.
+if(NOT EXISTS "${OUT}/l3/README_SYNTHETIC.txt")
+  message(FATAL_ERROR "the plain export did not write README_SYNTHETIC.txt")
+endif()
+file(READ "${OUT}/l3/README_SYNTHETIC.txt" notes)
+string(FIND "${notes}" "NOT MARKET DATA" at)
+if(at EQUAL -1)
+  message(FATAL_ERROR "README_SYNTHETIC.txt does not say the data is synthetic")
+endif()
 execute_process(COMMAND "${LOBSTER}" --messages "${OUT}/l3/${stem}_message_3.csv"
                         --orderbook "${OUT}/l3/${stem}_orderbook_3.csv" --mode strict --compare-depth 3
                 RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)

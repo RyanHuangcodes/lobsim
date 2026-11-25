@@ -100,7 +100,7 @@ class Xoshiro256StarStar {
 // Every consumer of randomness has its own stream, derived from the one master seed and
 // a stream id built from (role, index within the role, purpose). The id does not depend
 // on how many agents exist, so adding an agent never changes another agent's stream.
-enum class StreamRole : std::uint32_t { System = 0, NoiseTrader = 1, InformedTrader = 2, MarketMaker = 3, Test = 15 };
+enum class StreamRole : std::uint32_t { System = 0, NoiseTrader = 1, InformedTrader = 2, MarketMaker = 3, CalibratedFlow = 4, Test = 15 };
 enum class StreamPurpose : std::uint32_t {
   Decisions = 0,  // the agent's own-clock decisions: ctx.rng(), used in on_start/on_wakeup only
   Latency = 1,    // jitter on that agent's three channels
