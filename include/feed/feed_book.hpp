@@ -23,7 +23,7 @@ class FeedBook {
  public:
   // The largest price a Price(4) field can carry, in ticks.
   static constexpr lob::Price kMaxTicks = std::numeric_limits<std::uint32_t>::max() / 100;
-  // References index a vector (D-302); a reference this large is refused instead of allocated.
+  // References index a vector (D-602); a reference this large is refused instead of allocated.
   static constexpr std::uint64_t kMaxRef = std::uint64_t{1} << 26;
 
   // max_ref: references at or above it are refused (the fuzz target uses a small one).

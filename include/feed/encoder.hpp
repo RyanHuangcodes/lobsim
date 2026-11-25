@@ -1,7 +1,7 @@
 #pragma once
 
 // The feed encoder (upgrade 6): turns the engine events of each request into ITCH 5.0 messages
-// (FEED.md, DECISIONS D-306 to D-311). One pass over each request's events, a mirror of the
+// (FEED.md, DECISIONS D-606 to D-611). One pass over each request's events, a mirror of the
 // resting orders indexed by order id, and one output buffer written through a raw cursor. No heap
 // allocation per message once the buffer and the mirror have their size.
 
@@ -19,7 +19,7 @@
 
 namespace feed {
 
-// A value that does not fit its ITCH field (D-303 to D-305), or events that contradict the mirror.
+// A value that does not fit its ITCH field (D-603 to D-605), or events that contradict the mirror.
 // `request()` is the 1-based number of the request being encoded (0 for the start message).
 class EncodeError : public std::runtime_error {
  public:
@@ -54,7 +54,7 @@ class Encoder {
   explicit Encoder(std::FILE* out = nullptr, std::size_t expected_orders = 0,
                    std::size_t buffer_bytes = kDefaultBuffer);
 
-  // System event O, before the first request. Times are simulated ns (9:30 is added, D-303).
+  // System event O, before the first request. Times are simulated ns (9:30 is added, D-603).
   void start(std::int64_t sim_ns);
   // The messages of one request, from the events the engine produced for it, in order.
   void on_request(std::int64_t sim_ns, const lob::Request& req, std::span<const lob::Event> events);

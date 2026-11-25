@@ -4,7 +4,7 @@
 
 The feed can also be cut into MoldUDP64 packets, the framing Nasdaq uses to send ITCH over UDP, and read back with gap detection ([below](#moldudp64-packets)).
 
-The feed is a subset of ITCH 5.0. It uses five message types with ITCH's own fixed body layouts, every integer big-endian, and each body preceded by a 2-byte big-endian length. There is no custom header, so any ITCH reader can walk the file. lobsim's parser walks any ITCH 5.0 file framed this way and skips the types it does not use. The decisions behind every rule below are D-300 to D-331 in [DECISIONS.md](DECISIONS.md).
+The feed is a subset of ITCH 5.0. It uses five message types with ITCH's own fixed body layouts, every integer big-endian, and each body preceded by a 2-byte big-endian length. There is no custom header, so any ITCH reader can walk the file. lobsim's parser walks any ITCH 5.0 file framed this way and skips the types it does not use. The decisions behind every rule below are D-600 to D-643 in [DECISIONS.md](DECISIONS.md).
 
 ## Contents
 
@@ -119,7 +119,7 @@ Other checks, all in CI:
 | Fuzzing | `fuzz_feed_parse` in `fuzz-smoke` (60 s) and nightly (10 min); seeds and regressions in ctest | arbitrary bytes either parse and re-encode to exactly the same bytes, or are refused cleanly at an offset; the `FeedBook` never crashes ([FUZZING.md](FUZZING.md)) |
 | Injected-bug canary | CI job `feed-canary` | an encoder built with `LOBSIM_FEED_BUG=add_before_exec` publishes the taker's A before its executions. `check` must exit 2 on the hand-written exporter fixture, the differential stream must stop on the feed's crossing check, and the normal build must pass both |
 
-In the default simulator, no order ever trades as a taker and then rests: its noise traders price from their own view of the book, and its market maker is post-only. So a closed-loop simulator run cannot show the canary bug. The canary is checked on the fixture and on the random differential stream instead, which both contain that case (D-327).
+In the default simulator, no order ever trades as a taker and then rests: its noise traders price from their own view of the book, and its market maker is post-only. So a closed-loop simulator run cannot show the canary bug. The canary is checked on the fixture and on the random differential stream instead, which both contain that case (D-627).
 
 ## MoldUDP64 packets
 

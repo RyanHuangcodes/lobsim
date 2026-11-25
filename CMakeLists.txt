@@ -190,7 +190,7 @@ if(LOBSIM_FEED_BUG)
       -DEXPECT=2
       -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/feed_check_exit.cmake)
   # The default simulator never rests a remainder after trading as a taker, so a closed-loop run
-  # cannot show this bug (D-327); the seeded differential stream does, on its first such order.
+  # cannot show this bug (D-627); the seeded differential stream does, on its first such order.
   add_executable(fuzz_diff tests/fuzz_diff.cpp)
   target_include_directories(fuzz_diff PRIVATE tests)
   target_link_libraries(fuzz_diff PRIVATE lob feed lobsim_options)

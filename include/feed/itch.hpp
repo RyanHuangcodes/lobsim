@@ -34,7 +34,7 @@ inline constexpr std::array<std::uint8_t, 256> kBodyLen = [] {
   return t;
 }();
 
-inline constexpr std::uint64_t kOpenNs = 34'200'000'000'000;   // 9:30:00 after midnight (D-303)
+inline constexpr std::uint64_t kOpenNs = 34'200'000'000'000;   // 9:30:00 after midnight (D-603)
 inline constexpr std::uint64_t kTimestampLimit = 1ULL << 48;   // 6-byte timestamps are below this
 inline constexpr std::uint16_t kLocate = 1;
 inline constexpr std::array<char, 8> kStock = {'L', 'O', 'B', 'S', 'I', 'M', ' ', ' '};

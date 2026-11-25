@@ -79,7 +79,7 @@ void Encoder::emit_e(lob::OrderId maker, lob::Qty qty, std::uint64_t match) {
   ++counts_.E;
   counts_.bytes += kPrefix + kLenE;
   r.remaining -= qty;
-  if (r.remaining == 0) r.live = false;  // executed in full: gone, no D (D-308)
+  if (r.remaining == 0) r.live = false;  // executed in full: gone, no D (D-608)
 }
 
 void Encoder::emit_x(lob::OrderId id, lob::Qty qty) {
@@ -111,7 +111,7 @@ void Encoder::on_request(std::int64_t sim_ns, const lob::Request& req, std::span
   ++requests_;
   ts_ = timestamp(sim_ns);  // one check covers every message of the request
 
-  // The order this request may leave resting (D-306): a GTC limit order, or a priority-losing modify.
+  // The order this request may leave resting (D-606): a GTC limit order, or a priority-losing modify.
   std::optional<lob::OrderId> subject;
   lob::Side side = lob::Side::Buy;
   lob::Price px = 0;
