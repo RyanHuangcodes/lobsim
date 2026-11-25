@@ -1,0 +1,37 @@
+# Order types, one at a time. Run:
+#   build/release/labs/lab02_book_repl < course/labs/scripts/order_types.txt
+# Before each command, guess what the engine will answer. Then compare.
+#
+# Set the scene: trader 1 sells 3 @ 100 and 4 @ 101.
+as 1
+sell 3 @ 100
+sell 4 @ 101
+book
+#
+# A) IOC: trader 2 wants 5 @ 100, "now or never". 3 are there, the other 2 are cancelled.
+as 2
+buy 5 @ 100 ioc
+#
+# B) FOK: trader 2 wants 5 @ 101, "all of it now, or nothing". Only 4 are left: nothing happens.
+buy 5 @ 101 fok
+book
+#
+# C) The same FOK for 4 lots: exactly enough, so it fills completely.
+buy 4 @ 101 fok
+#
+# D) Market order on an empty side: there are no sellers left at all.
+buy 2 market
+#
+# E) Post-only: trader 3 puts up a bid at 99. Trader 4 tries a post-only sell at 99, which
+#    would trade on arrival, so it is refused. A post-only sell at 100 is fine: it rests.
+as 3
+buy 2 @ 99
+as 4
+sell 1 @ 99 post
+sell 1 @ 100 post
+book
+#
+# F) Invalid requests are refused and change nothing: zero quantity, price 0, post-only market.
+sell 0 @ 105
+sell 1 @ 0
+sell 1 market post

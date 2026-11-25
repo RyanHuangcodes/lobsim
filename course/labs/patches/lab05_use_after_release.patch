@@ -1,0 +1,21 @@
+diff --git a/src/lob/order_book.cpp b/src/lob/order_book.cpp
+index a23ebde..309553f 100644
+--- a/src/lob/order_book.cpp
++++ b/src/lob/order_book.cpp
+@@ -134,7 +134,6 @@ OrderBook::MatchResult OrderBook::match_in(Makers& makers, Taker& t, EventBuffer
+ 
+     Order* m = level.head;
+     while (m != nullptr && t.remaining > 0) {
+-      Order* const next = m->next;
+       if (m->owner == t.owner) {
+         if (t.stp == STP::CancelTaking) {
+           result.stopped_by_stp = true;
+@@ -160,7 +159,7 @@ OrderBook::MatchResult OrderBook::match_in(Makers& makers, Taker& t, EventBuffer
+           release(m);
+         }
+       }
+-      m = next;
++      m = m->next;  // COURSE LAB 5.3: a deliberate bug, m may already be back in the pool here
+     }
+ 
+     if (level.count == 0) makers.erase(it);

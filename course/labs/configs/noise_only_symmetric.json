@@ -1,0 +1,33 @@
+{
+  "seed": 42,
+  "duration_s": 3600,
+  "warmup_s": 60,
+  "max_price": 1000000,
+  "initial_price": 10000,
+  "tick_display": 0.01,
+  "fundamental": {
+    "sigma_ticks_per_sqrt_s": 1.0,
+    "dt_s": 0.1
+  },
+  "noise_traders": {
+    "count": 10,
+    "lambda": 5.0,
+    "p_limit": 0.85,
+    "order_lifetime_mean_s": 30.0,
+    "D": 10,
+    "max_size": 10,
+    "reference_price": "symmetric",
+    "latency_us": {
+      "entry": 200,
+      "response": 200,
+      "feed": 200,
+      "jitter": 50
+    }
+  },
+  "markout_horizons_s": [
+    1,
+    5,
+    30
+  ],
+  "sample_interval_s": 1.0
+}

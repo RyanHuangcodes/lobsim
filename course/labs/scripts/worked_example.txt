@@ -1,0 +1,13 @@
+# The worked example of SPEC.md section 1.
+# Three sellers put up their asks. A sells 5 @ 101 first, then B sells 3 @ 101, then C sells 4 @ 102.
+as 1
+sell 5 @ 101
+as 2
+sell 3 @ 101
+as 3
+sell 4 @ 102
+book
+# A buyer (trader 9) wants 10 lots and will pay at most 101.
+as 9
+buy 10 @ 101
+book

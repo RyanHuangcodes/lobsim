@@ -1,0 +1,41 @@
+# Modify rules and self-trade prevention. Run:
+#   build/release/labs/lab02_book_repl < course/labs/scripts/modify_and_stp.txt
+#
+# Three bids at 100, in this order: #1 (trader 1), #2 (trader 2), #3 (trader 3).
+as 1
+buy 5 @ 100
+as 2
+buy 5 @ 100
+as 3
+buy 5 @ 100
+book
+#
+# A) Trader 1 shrinks #1 from 5 to 2 lots at the same price: it KEEPS its place at the front.
+as 1
+modify 1 100 2
+book
+#
+# B) Trader 2 grows #2 from 5 to 8 lots: it LOSES its place and goes to the back of the line.
+as 2
+modify 2 100 8
+book
+#
+# C) Someone else may not touch your order: trader 3 tries to cancel #1.
+as 3
+cancel 1
+#
+# D) A seller arrives for 4 lots: #1 (2 lots) first, then #3 (now second in line), not #2.
+as 9
+sell 4 @ 100
+book
+#
+# E) Self-trade prevention, default mode CancelTaking: trader 3 sells into the bids. Its own
+#    order #3 is first in line, so its sell is stopped before it can trade with itself.
+as 3
+sell 10 @ 100
+book
+#
+# F) The same thing in mode CancelResting ("resting"): this time trader 3's own RESTING order #3
+#    is the one cancelled, and the sell goes on to trade with the next order in line, #2.
+sell 5 @ 100 resting
+book

@@ -1,0 +1,12 @@
+diff --git a/src/lob/order_book.cpp b/src/lob/order_book.cpp
+index a23ebde..698f0ca 100644
+--- a/src/lob/order_book.cpp
++++ b/src/lob/order_book.cpp
+@@ -146,6 +146,7 @@ OrderBook::MatchResult OrderBook::match_in(Makers& makers, Taker& t, EventBuffer
+       } else {
+         const Qty qty = std::min(t.remaining, m->remaining);
+         Price trade_price = level.price;
++        if (!t.is_market) trade_price = t.limit;  // COURSE LAB 6: a deliberate bug, the trade prints at the taker's price
+ #ifdef LOBSIM_BUG_TAKER_PRICE
+         if (!t.is_market) trade_price = t.limit;  // injected bug: print at the taker's limit
+ #endif
