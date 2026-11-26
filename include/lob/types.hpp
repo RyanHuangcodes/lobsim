@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <variant>
 
@@ -65,6 +66,10 @@ struct Fill {
 
 struct BookConfig {
   Price max_price{1'000'000};
+  // OrderBook sizes its order-id index for ids 1..expected_order_ids at construction, so no message
+  // pays for growing it while ids stay within the estimate. 0 means grow on demand, as before; ids
+  // beyond the estimate still grow the index. ReferenceBook ignores it.
+  std::size_t expected_order_ids{0};
   bool operator==(const BookConfig&) const = default;
 };
 
