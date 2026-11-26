@@ -18,6 +18,7 @@ A limit order book, matching engine and agent-based trading simulator in C++20, 
 | Injected-bug canaries | 3 deliberate matching bugs, each caught by the fuzzer in under 1 s (with or without seed inputs); CI fails if any stops being caught |
 | Determinism | Same config and seed give byte-identical output; the order log replays to the same engine event hash |
 | CI | GCC and Clang, Debug and Release, ASan + UBSan, fuzz smoke tests, canaries, coverage, nightly fuzzing, automatic dashboard deploy |
+| Market-data feed | ITCH 5.0 encoder and decoder: the book rebuilt from the bytes matches the engine after every request. Encode 47.2 million requests/s, parse 3.34 GiB/s, 0 allocations per message (Intel Xeon 8488C; Apple M4 pending) |
 
 ## What's in it
 
@@ -28,6 +29,7 @@ A limit order book, matching engine and agent-based trading simulator in C++20, 
 - **LOBSTER replay** ([REAL_DATA.md](REAL_DATA.md)): `lobsim_lobster` rebuilds the book from a LOBSTER message file, compares it with the published book after every message, and checks lobsim's matching rule against every burst of executions. Tested on synthetic data so far; real Nasdaq results are pending.
 - **Dress rehearsal**: two synthetic LOBSTER-like fake days (full opening book, hidden executions, a halt, price-window filtering) with an audit that explains every discrepancy, run in CI.
 - **Calibration** ([CALIBRATION.md](CALIBRATION.md)): `lobsim_calibrate` measures the order flow (rates, placement, sizes, lifetimes) from a LOBSTER day, a calibrated background agent reproduces it in the simulator, and `validate` tests the result on a later period the estimator never reads. Rehearsed on synthetic days; real-data results are pending.
+- **Binary market-data feed** ([FEED.md](FEED.md)): `lobsim_feed` publishes every book change of a run as Nasdaq TotalView-ITCH 5.0 messages (S, A, E, X, D, byte for byte), rebuilds the book from the bytes alone, and checks it against the engine after every request. It is fuzzed, and an injected encoder bug is required to be caught in CI.
 - **Replay dashboard** ([DASHBOARD.md](DASHBOARD.md)): `lobsim_viz_export` turns a run into a compact bundle after re-verifying its event hash and PnL, and a no-build static web app replays it. GitHub Actions rebuilds and deploys it to GitHub Pages on every push to `main`.
 
 `SPEC.md` is the original specification and `DECISIONS.md` records every decision the specification left open, one line each with the reason.
@@ -42,8 +44,9 @@ A limit order book, matching engine and agent-based trading simulator in C++20, 
 | 2b | Dress rehearsal on synthetic LOBSTER-like days, with audit and CI test | Done |
 | 3 | Calibration: order flow measured from LOBSTER data, a calibrated background flow, out-of-sample validation ([CALIBRATION.md](CALIBRATION.md)) | Done on synthetic days; real-data run pending data |
 | 4 | Replay dashboard, deployed to GitHub Pages | Done |
+| 6 | Binary market-data feed (ITCH 5.0): encoder, decoder, book rebuilt from the feed, fuzzing, canary, MoldUDP64 packets | Done |
 | | An informed trader that reacts to the size of the mispricing | Next |
-| | Reinforcement-learning environment, binary market-data feed, multithreading | Planned |
+| | Reinforcement-learning environment, multithreading | Planned |
 
 ## Contents
 
@@ -60,6 +63,7 @@ A limit order book, matching engine and agent-based trading simulator in C++20, 
 - [Real-data replay (data pending)](#real-data-replay-data-pending)
 - [Calibration (data pending)](#calibration-data-pending)
 - [Live dashboard](#live-dashboard)
+- [Binary market-data feed](#binary-market-data-feed)
 - [What is not modelled](#what-is-not-modelled)
 
 ## Build, test and run
@@ -117,6 +121,7 @@ Export a run in LOBSTER format and replay it against its own book with the LOBST
   +------------------------------------------------------------------------------------------------------+
 
   lobsim_replay: orders.log --> a fresh lob::OrderBook --> engine event hash (equal to the live run's)
+  lobsim_feed:   orders.log --> lob::OrderBook --> ITCH 5.0 bytes --> FeedBook (equal to the engine's book after every request)
 ```
 
 `lob` does not depend on `sim`. Layout:
@@ -127,10 +132,11 @@ Export a run in LOBSTER format and replay it against its own book with the LOBST
 | `include/sim`, `src/sim` | RNG, event queue, latency channels, exchange, fundamental, config, kernel, metrics, replay, order-log codec |
 | `include/sim/agents` | `NoiseTrader`, `InformedTrader`, `AvellanedaStoikovMM`, `CalibratedFlowAgent` |
 | `include/calib`, `src/calib` | the estimator, the market fingerprint, the calibration file, validation and recovery |
-| `apps` | `lobsim_run`, `lobsim_replay`, `lobsim_bench`, `lobsim_export_lobster`, `lobsim_lobster`, `lobsim_calibrate`, `lobsim_fingerprint` |
+| `include/feed`, `src/feed` | the ITCH 5.0 wire layer, `feed::Encoder`, the parser and `FeedBook` ([FEED.md](FEED.md)) |
+| `apps` | `lobsim_run`, `lobsim_replay`, `lobsim_bench`, `lobsim_export_lobster`, `lobsim_lobster`, `lobsim_calibrate`, `lobsim_fingerprint`, `lobsim_feed` |
 | `bench` | Google Benchmark microbenchmarks |
 | `tests` | unit tests, differential fuzz test, determinism and replay tests, simulator stress tests |
-| `fuzz` | libFuzzer targets (engine differential, book builder, `orders.log` parser, LOBSTER parsers), seed corpora and saved regressions |
+| `fuzz` | libFuzzer targets (engine differential, book builder, `orders.log` parser, LOBSTER parsers, ITCH feed parser), seed corpora and saved regressions |
 | `viz` | `lobsim_viz_export` and the bundle format ([viz/BUNDLE.md](viz/BUNDLE.md)) |
 | `web` | the static replay dashboard (plain HTML, CSS and ES modules; vendored uPlot) |
 | `scripts` | `run_real_data.sh`, `make_fake_day.sh`, `run_recovery.sh`, `calibration_ablation.sh`, `build_site.sh` and the dashboard test fixture |
@@ -413,6 +419,7 @@ Departures from the specification, each recorded with its evidence:
 | Replay | The live run's event hash equals the hash of its log replayed through the text, in process and through the command-line tools |
 | LOBSTER replay tests (`replay_tests`) | The two line parsers, and the replayer on hand-written fixtures (every counter, the exact-row rates, the corrections and the matching classes derived by hand and compared exactly) |
 | Closed loop | A 60 s simulator run exported to LOBSTER files and replayed: strict mode must be exact on every row at every depth and every scored burst of executions must agree with `preview_match`; filtered to the top 10 levels, resync mode must make no level-1 correction |
+| Binary feed | Golden bytes for every ITCH message, one engine scenario per mapping rule, every parser and rebuild error; a 60 s and a 600 s closed loop (`lobsim_feed check`); the seeded differential test also rebuilds every seed's book from the feed and compares digests |
 | Fuzz regression tests | Every committed fuzz seed and every saved crash input runs through the same differential check and the `orders.log` parser check that the libFuzzer targets use |
 | Sanitizers | The whole suite under AddressSanitizer and UndefinedBehaviorSanitizer |
 
@@ -430,6 +437,7 @@ Every push and pull request runs [`ci.yml`](.github/workflows/ci.yml):
 | `fuzz-canary` | one build per injected matching bug; the fuzzer must find it, from the corpus and from no seeds at all |
 | `replay-canary` | one build per injected replayer bug; the LOBSTER replay must detect it, and a no-bug control must stay exact |
 | `coverage` | line coverage of the matching engine |
+| `feed-canary` | the ITCH encoder built with an injected bug (a taker's Add Order before its executions); the book rebuilt from the feed must refuse it, and a no-bug control must check clean |
 
 [`fuzz-nightly.yml`](.github/workflows/fuzz-nightly.yml) fuzzes for longer every night, and [`pages.yml`](.github/workflows/pages.yml) rebuilds the dashboard's demo run and deploys it on every push to `main`.
 
@@ -481,6 +489,12 @@ With files in `data/lobster/`, `scripts/run_real_data.sh --calibrate` runs it on
 The demo is one simulated hour with the default config and seed 42, rebuilt by [`pages.yml`](.github/workflows/pages.yml) on every push to `main`. It shows the order-book heatmap (resting size by price and time, with best bid, best ask and trades), the depth ladder at the cursor with the market maker's quotes labelled, the price / fundamental / MM-quote / trade chart, and the market maker's inventory and PnL, all on one synchronized timeline with play, pause and scrub.
 
 Before writing a bundle, `lobsim_viz_export` rebuilds the book from `orders.log` and checks the engine event hash and the market maker's PnL against the run's `summary.json`; it writes nothing if they differ. To export and view any run locally, read each panel, or set up Pages on a fork: [DASHBOARD.md](DASHBOARD.md).
+
+## Binary market-data feed
+
+`lobsim_feed` writes every change to a run's visible book as a Nasdaq TotalView-ITCH 5.0 feed: five message types (S, A, E, X, D) with ITCH's own big-endian layouts, each framed by a 2-byte length, so any ITCH reader can walk it. `lobsim_feed check --run <dir>` rebuilds the book from the feed bytes alone. After every request it compares that book's best prices and top 10 levels with the engine's, and every 10,000 requests and at the end the full book. It also checks the executions against the engine's trades and that the parsed messages re-encode to the same bytes. The default 1-hour run checks clean: 331,640 requests become 11,182,852 bytes, 33.72 per request. `lobsim_feed packetize` and `depacketize` carry the feed in MoldUDP64 packets (file and memory only), and the reader reports every gap in the sequence numbers.
+
+On an Intel Xeon 8488C (Release, median of 3 runs), encoding runs at 47.2 million requests/s, 1.8 times the engine on the same machine. Parsing runs at 3.34 GiB/s. Neither makes a heap allocation per message. Apple M4 numbers are pending. Format, mapping rules, verification and every measurement: [FEED.md](FEED.md).
 
 ## What is not modelled
 

@@ -1,5 +1,5 @@
 // Regression tests (upgrade 1, 3.4, 7): every regular file of fuzz/regressions/<kind>/ and then of
-// fuzz/corpus/<kind>/ is run through run_diff (kind diff) or run_replay_parse (kind replay_parse) or run_lobster_parse (kind lobster_parse).
+// fuzz/corpus/<kind>/ is run through run_diff (kind diff) or run_replay_parse (kind replay_parse) or run_lobster_parse (kind lobster_parse) or run_feed_parse (kind feed_parse).
 // Both abort on a failure, so a failing file ends the process; the path is printed to stderr
 // first so ctest's output names it.
 #include <gtest/gtest.h>
@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "diff_driver.hpp"
+#include "feed_parse_driver.hpp"
 #include "lobster_parse_driver.hpp"
 #include "replay_parse_driver.hpp"
 
@@ -109,6 +110,11 @@ TEST(FuzzCorpus, CommittedSeedsAreFound) {
                            "book_l5.csv", "book_l1.csv", "malformed.csv", "crlf.csv"}) {
     EXPECT_TRUE(has_file(lobster, name)) << "missing lobster_parse seed " << name;
   }
+  const std::vector<Case> feed = collect_cases("feed_parse");
+  for (const char* name : {"golden_s_open.itch", "golden_a.itch", "golden_e.itch", "golden_x.itch", "golden_d.itch",
+                           "golden_feed.itch", "closed_loop_2000.itch"}) {
+    EXPECT_TRUE(has_file(feed, name)) << "missing feed_parse seed " << name;
+  }
 }
 
 class DiffRegression : public ::testing::TestWithParam<Case> {};
@@ -170,6 +176,21 @@ TEST_P(LobsterParseRegression, ParsesOrRejectsCleanlyAndRoundTrips) {
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(LobsterParseRegression);
 
 INSTANTIATE_TEST_SUITE_P(LobsterParse, LobsterParseRegression, ::testing::ValuesIn(collect_cases("lobster_parse")),
+                         [](const ::testing::TestParamInfo<Case>& info) { return info.param.name; });
+
+class FeedParseRegression : public ::testing::TestWithParam<Case> {};
+
+TEST_P(FeedParseRegression, ParsesOrRejectsCleanlyAndRoundTrips) {
+  const Case& c = GetParam();
+  std::fprintf(stderr, "run_feed_parse: %s\n", c.path.c_str());
+  std::fflush(stderr);
+  const std::vector<std::uint8_t> bytes = read_bytes(c.path);
+  lob::fuzz::run_feed_parse(bytes.data(), bytes.size());
+}
+
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(FeedParseRegression);
+
+INSTANTIATE_TEST_SUITE_P(FeedParse, FeedParseRegression, ::testing::ValuesIn(collect_cases("feed_parse")),
                          [](const ::testing::TestParamInfo<Case>& info) { return info.param.name; });
 
 }  // namespace

@@ -325,3 +325,17 @@ mutation within a few thousand executions.
 
 Every crashing input decodes with `lobsim_fuzz_decode` from a normal build and ends with
 `books agree`: the bug exists only in the canary binary.
+
+## The ITCH feed parser (upgrade 6)
+
+**`fuzz_feed_parse`: the binary market-data feed parser** (`include/feed/decoder.hpp`, [FEED.md](FEED.md)). The input is the bytes of a feed file. The shared check, `run_feed_parse` in `fuzz/feed_parse_driver.cpp`, has two parts. First, `feed::parse` must either accept the whole input, and then re-encoding every parsed message must give exactly the input, or stop at an error offset, and then the messages before it must re-encode to exactly the bytes before it. Second, the same bytes parsed into a `FeedBook` must be accepted or refused message by message without a crash, and the rebuilt book must pass `OrderBook::validate()`. The `FeedBook` of the fuzz target refuses references of 2^16 or more, so one input cannot allocate a large reference index.
+
+Seeds (`fuzz/corpus/feed_parse/`, written by `python3 fuzz/make_feed_seeds.py`): the five golden messages of `tests/unit/feed_itch_test.cpp`, one per file. There is also a valid six-message feed holding all five types, and `closed_loop_2000.itch`, the first 2,000 messages (67,557 bytes) of the feed of the 60 s seed-7 run. That slice was made with:
+
+    build/release/lobsim_run --config configs/default.json --seed 7 --duration-s 60 --out $OUT/run
+    build/release/lobsim_feed encode --run $OUT/run --out $OUT/run.itch
+    python3 fuzz/make_feed_seeds.py --slice $OUT/run.itch
+
+`fuzz/regressions/feed_parse/` holds minimized crash files, as for the other targets. The ctest entry `fuzz_regressions_feed_parse` runs both folders through `run_feed_parse` in every build, and `FuzzCorpus.CommittedSeedsAreFound` fails if a committed seed is missing.
+
+CI: the `fuzz-smoke` job ends with a check that `libfeed.a` is instrumented. It then runs `fuzz_feed_parse` for 60 s with `-max_len=70000`, so the closed-loop slice is used whole. The nightly workflow runs it for 10 minutes. The feed's injected-bug canary is the `feed-canary` job of `ci.yml`. It is not a fuzzer canary: the bug is in the encoder, and the book rebuilt from the feed catches it (FEED.md, DECISIONS D-617 and D-627).

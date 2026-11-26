@@ -1,7 +1,9 @@
 // Differential fuzz test (SPEC 4): one seeded stream of valid and invalid requests is fed
 // to OrderBook and ReferenceBook. After every message the two event lists must be equal,
 // validate() must pass on both, and quantity conservation must hold; every few messages
-// the query APIs are compared too. Exits non-zero on the first difference, printing the
+// the query APIs are compared too. The engine's events are also encoded as the ITCH feed
+// (upgrade 6) and parsed back into a book built from the feed alone, whose digest must equal
+// the engine book's at the end of every seed. Exits non-zero on the first difference, printing the
 // seed, message index, request and both event lists.
 //
 //   fuzz_diff                          200 seeds x 10,000 messages (what ctest runs)
@@ -24,6 +26,9 @@
 #include <variant>
 #include <vector>
 
+#include "feed/decoder.hpp"
+#include "feed/encoder.hpp"
+#include "feed/feed_book.hpp"
 #include "lob/apply.hpp"
 #include "lob/events.hpp"
 #include "lob/order_book.hpp"
@@ -564,6 +569,12 @@ bool run_seed(std::uint64_t seed, const Options& opt, Coverage& cov) {
   ev_ref.reserve(512);
   const auto lookup = [&fast](OrderId id) { return fast.order(id); };
   std::size_t prev_resting = 0;
+  // The binary feed (upgrade 6): every request's events are encoded and parsed straight back into
+  // a book built from the feed alone; its digest must equal the engine book's at the end.
+  feed::Encoder feed_enc(nullptr, opt.messages);
+  feed::FeedBook feed_book(opt.messages);
+  feed_enc.start(0);
+  feed::parse(feed_enc.buffered(), feed_book);  // S O
 
   for (std::uint64_t i = 0; i < opt.messages; ++i) {
     const Request req = gen.next(fast, i);
@@ -608,6 +619,16 @@ bool run_seed(std::uint64_t seed, const Options& opt, Coverage& cov) {
       }
     }
     if (err.empty() && i % 3 == 0) err = compare_queries(fast, ref, gen, qrng, i % 50 == 0);
+    if (err.empty()) {
+      try {
+        feed_enc.clear();
+        feed_enc.on_request(static_cast<std::int64_t>(i + 1), req, ev_fast);
+        const feed::ParseResult pr = feed::parse(feed_enc.buffered(), feed_book);
+        if (!pr.ok()) err = "feed: " + (feed_book.failed() ? feed_book.error() : std::string(feed::to_string(pr.error)));
+      } catch (const std::exception& e) {
+        err = std::string("feed encoder threw: ") + e.what();
+      }
+    }
 
     if (!err.empty()) {
       std::printf("MISMATCH seed=%llu message=%llu: %s\n  request: %s\n  OrderBook events:\n%s"
@@ -632,6 +653,15 @@ bool run_seed(std::uint64_t seed, const Options& opt, Coverage& cov) {
   std::string err = compare_queries(fast, ref, gen, qrng, true);
   for (OrderId id = 1; err.empty() && id <= gen.max_id(); ++id) err = compare_order(id, fast, ref);
   if (err.empty() && hash_fast.value() != hash_ref.value()) err = "event hashes differ";
+  if (err.empty()) {
+    feed_enc.clear();
+    feed_enc.finish(static_cast<std::int64_t>(opt.messages + 1));
+    if (!feed::parse(feed_enc.buffered(), feed_book).ok() || !feed_book.finish()) {
+      err = "feed: " + feed_book.error();
+    } else if (feed::book_digest(feed_book.book()) != feed::book_digest(fast)) {
+      err = "the book rebuilt from the feed differs from the engine's (digest)";
+    }
+  }
   if (!err.empty()) {
     std::printf("MISMATCH seed=%llu after %llu messages: %s\n", static_cast<unsigned long long>(seed),
                 static_cast<unsigned long long>(opt.messages), err.c_str());

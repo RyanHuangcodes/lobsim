@@ -68,6 +68,21 @@ if(NOT LOBSIM_REPLAY_BUG STREQUAL "")
   add_compile_definitions(LOBSIM_REPLAY_BUG_${LOBSIM_REPLAY_BUG}=1 LOBSIM_REPLAY_BUG_BUILD=1)
 endif()
 
+# One injected feed-encoder bug for the feed canary (upgrade 6, src/feed/encoder.cpp). The build
+# holds only lob, orderlog, feed and lobsim_feed. An unknown name stops here, and so does a
+# combination with any other injected bug or the fuzz build.
+set(LOBSIM_FEED_BUG "" CACHE STRING "Feed canary: add_before_exec")
+if(NOT LOBSIM_FEED_BUG STREQUAL "")
+  if(NOT LOBSIM_FEED_BUG STREQUAL "add_before_exec")
+    message(FATAL_ERROR "LOBSIM_FEED_BUG='${LOBSIM_FEED_BUG}' is not add_before_exec")
+  endif()
+  if(LOBSIM_FUZZ OR NOT LOBSIM_INJECT_BUG STREQUAL "" OR NOT LOBSIM_REPLAY_BUG STREQUAL "")
+    message(FATAL_ERROR "LOBSIM_FEED_BUG cannot be combined with LOBSIM_FUZZ, LOBSIM_INJECT_BUG or LOBSIM_REPLAY_BUG: one injected bug per build")
+  endif()
+  string(TOUPPER "${LOBSIM_FEED_BUG}" _lobsim_feed_bug)
+  add_compile_definitions(LOBSIM_FEED_BUG_${_lobsim_feed_bug}=1 LOBSIM_FEED_BUG_BUILD=1)
+endif()
+
 # Warnings apply to our targets only, through this interface target.
 add_library(lobsim_options INTERFACE)
 target_compile_options(lobsim_options INTERFACE -Wall -Wextra -Wpedantic)
@@ -155,6 +170,35 @@ endif()
 # The orders.log codec and the replay: they need only lob, so the fuzz build compiles them too.
 add_library(orderlog STATIC src/sim/order_log.cpp src/sim/replay.cpp)
 target_link_libraries(orderlog PUBLIC lob PRIVATE lobsim_options)
+
+# The binary market-data feed (upgrade 6, FEED.md): the ITCH 5.0 encoder and the book rebuilt from
+# the feed. lob only, never sim. The fuzz build compiles it too, so the feed fuzzer is instrumented.
+add_library(feed STATIC src/feed/encoder.cpp src/feed/feed_book.cpp)
+target_link_libraries(feed PUBLIC lob PRIVATE lobsim_options)
+if(NOT LOBSIM_FUZZ)
+  add_executable(lobsim_feed apps/feed_main.cpp)
+  target_link_libraries(lobsim_feed PRIVATE feed orderlog lobsim_options)
+endif()
+# Feed canary build (LOBSIM_FEED_BUG): lob, orderlog, feed and lobsim_feed only. The check of the
+# hand-written exporter fixture (a crossing modify, partial fills) must fail with exit code 2.
+if(LOBSIM_FEED_BUG)
+  enable_testing()
+  add_test(NAME feed_canary_${LOBSIM_FEED_BUG}_fixture
+    COMMAND ${CMAKE_COMMAND}
+      -DFEED=$<TARGET_FILE:lobsim_feed>
+      -DRUN_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/lobster_export
+      -DEXPECT=2
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/feed_check_exit.cmake)
+  # The default simulator never rests a remainder after trading as a taker, so a closed-loop run
+  # cannot show this bug (D-627); the seeded differential stream does, on its first such order.
+  add_executable(fuzz_diff tests/fuzz_diff.cpp)
+  target_include_directories(fuzz_diff PRIVATE tests)
+  target_link_libraries(fuzz_diff PRIVATE lob feed lobsim_options)
+  add_test(NAME feed_canary_${LOBSIM_FEED_BUG}_diff
+    COMMAND ${CMAKE_COMMAND} -DDIFF=$<TARGET_FILE:fuzz_diff>
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/feed_canary_diff.cmake)
+  return()
+endif()
 
 # Shared differential driver and the crash-file decoder (upgrade 1).
 add_subdirectory(fuzz)
@@ -488,3 +532,37 @@ add_test(NAME real_data_calibrate_guards
     -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_real_data.sh
     -DOUT=${CMAKE_CURRENT_BINARY_DIR}/real_data_calibrate_guards
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_real_data_guards.cmake)
+
+# Binary market-data feed (upgrade 6, FEED.md): the ITCH 5.0 tests run inside lob_tests.
+target_sources(lob_tests PRIVATE tests/unit/feed_itch_test.cpp tests/unit/feed_encoder_test.cpp
+  tests/unit/feed_decoder_test.cpp tests/unit/feed_mold_test.cpp)
+target_link_libraries(lob_tests PRIVATE feed)
+# The seeded differential test also rebuilds the book from the feed and compares digests.
+target_link_libraries(fuzz_diff PRIVATE feed)
+# Closed loop of the feed: a 60 s run and the 600 s run length of the LOBSTER closed loop (seed 7).
+foreach(_duration 60 600)
+  add_test(NAME feed_closed_loop_${_duration}s
+    COMMAND ${CMAKE_COMMAND}
+      -DRUN=$<TARGET_FILE:lobsim_run> -DFEED=$<TARGET_FILE:lobsim_feed>
+      -DCONFIG=${CMAKE_CURRENT_SOURCE_DIR}/configs/default.json -DSEED=7 -DDURATION=${_duration}
+      -DOUT=${CMAKE_CURRENT_BINARY_DIR}/feed_closed_loop_${_duration}s
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/feed_closed_loop.cmake)
+endforeach()
+# The hand-written exporter fixture checks clean (the control of the feed canary), and a missing
+# run folder is bad input (exit code 1).
+add_test(NAME feed_check_fixture
+  COMMAND ${CMAKE_COMMAND} -DFEED=$<TARGET_FILE:lobsim_feed>
+    -DRUN_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/lobster_export -DEXPECT=0
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/feed_check_exit.cmake)
+add_test(NAME feed_check_missing_run
+  COMMAND ${CMAKE_COMMAND} -DFEED=$<TARGET_FILE:lobsim_feed>
+    -DRUN_DIR=${CMAKE_CURRENT_BINARY_DIR}/feed_no_such_run -DEXPECT=1
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/feed_check_exit.cmake)
+# Every file of fuzz/regressions/feed_parse and fuzz/corpus/feed_parse through run_feed_parse.
+add_test(NAME fuzz_regressions_feed_parse COMMAND fuzz_regression_tests --gtest_filter=FeedParse/*)
+# Benchmarks of the feed: `lobsim_bench --feed` counts its heap allocations, and micro_bench times
+# encode, parse and parse + rebuild (bench/feed_bench.cpp).
+target_link_libraries(lobsim_bench PRIVATE feed)
+add_test(NAME lobsim_bench_feed_smoke COMMAND lobsim_bench --feed --messages 20000)
+target_sources(micro_bench PRIVATE bench/feed_bench.cpp)
+target_link_libraries(micro_bench PRIVATE feed)
