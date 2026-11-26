@@ -7,7 +7,8 @@
 #   2. runs the default config with fixed seed 42 for the configured duration,
 #   3. exports a viz bundle into site/runs/demo/{meta.json,data.bin},
 #   4. copies web/ (index.html, css/, js/, vendor/) into site/, and
-#   5. rewrites site/index.html so the dashboard loads run=demo when no ?run is given.
+#   5. writes js/default-run.js and loads it from site/index.html, so the dashboard opens run=demo
+#      when no ?run is given.
 #
 # The default run matches the committed demo: seed 42, the default config's duration_s (1 hour).
 # For a quick local proof you may shorten the run with DURATION_S, e.g.
@@ -82,12 +83,12 @@ rm -rf "${site}/test"
 # published root URL loads the demo run while explicit ?run=<name> links still override it. It is a
 # file, not inline, so the page's Content-Security-Policy can forbid inline scripts. We edit only the
 # generated site copy; the committed web/index.html is untouched.
-cat > "${site}/js/default-run.js" <<'JS'
-// GitHub Pages default: load the committed demo run when no ?run is supplied.
+cat > "${site}/js/default-run.js" <<JS
+// GitHub Pages default: load the committed ${run_name} run when no ?run is supplied.
 (function () {
   var p = new URLSearchParams(location.search);
   if (!p.get("run")) {
-    p.set("run", "demo");
+    p.set("run", "${run_name}");
     history.replaceState(null, "", location.pathname + "?" + p.toString() + location.hash);
   }
 })();
@@ -107,12 +108,14 @@ with open(path, "w", encoding="utf-8") as f:
     f.write(html)
 PY
 
-# Sanity checks: the assets the dashboard needs must all be present.
+# Sanity checks: the assets the dashboard needs must all be present. The python step above already
+# fails unless index.html loads js/default-run.js.
 missing=0
 for p in \
   "index.html" \
   "css/style.css" \
   "js/app.js" \
+  "js/default-run.js" \
   "vendor/uplot/uPlot.iife.min.js" \
   "runs/${run_name}/meta.json" \
   "runs/${run_name}/data.bin"; do
@@ -121,10 +124,6 @@ for p in \
     missing=1
   fi
 done
-if ! grep -q 'run.*demo' "${site}/index.html"; then
-  echo "build_site: ERROR site/index.html does not default to run=demo" >&2
-  missing=1
-fi
 [ "${missing}" -eq 0 ] || exit 1
 
 echo "build_site: site/ contents:"
